@@ -21,6 +21,7 @@ from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from .classify import Verdict, classify
 from .config import MAX_UPLOAD_BYTES, WHISPER_MODEL
 from .frames import select as select_frames
 from .media import MediaError, prepare, workspace
@@ -168,7 +169,36 @@ def _process(
     )
 
 
+class ClassifyItem(BaseModel):
+    caption: Optional[str] = None
+    creator_handle: Optional[str] = None
+
+
+class ClassifyRequest(BaseModel):
+    items: list[ClassifyItem] = Field(
+        description="Captions to judge, in order. One model call covers the whole batch, "
+                    "so send a hundred rather than one.")
+
+
+class ClassifyResponse(BaseModel):
+    verdicts: list[Verdict]
+    seconds_elapsed: float
+
+
 # ------------------------------------------------------------------- endpoints
+
+
+@app.post("/classify", response_model=ClassifyResponse)
+def classify_batch(request: ClassifyRequest) -> ClassifyResponse:
+    """Judges a batch of captions as food or not, in a single model call."""
+    started = time.time()
+
+    if not request.items:
+        return ClassifyResponse(verdicts=[], seconds_elapsed=0)
+
+    verdicts = classify([item.model_dump() for item in request.items])
+
+    return ClassifyResponse(verdicts=verdicts, seconds_elapsed=round(time.time() - started, 2))
 
 @app.get("/health")
 def health() -> dict:

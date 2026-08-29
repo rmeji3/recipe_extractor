@@ -9,7 +9,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Recipe.Api.Data.App;
 using Recipe.Api.Services.Extraction;
+using Recipe.Api.Services.Classification;
 using Recipe.Api.Services.Metadata;
+using Recipe.Api.Services.Queue;
 
 namespace Recipe.Tests;
 
@@ -60,6 +62,15 @@ public class AppFixture : WebApplicationFactory<Program>, IAsyncLifetime
             services.RemoveAll<IShortLinkResolver>();
             services.AddSingleton<StubShortLinkResolver>();
             services.AddSingleton<IShortLinkResolver>(sp => sp.GetRequiredService<StubShortLinkResolver>());
+
+            // Program.cs registers neither of these under Testing, so there is no Redis
+            // connection to replace and no background worker racing the assertions.
+            services.AddSingleton<StubJobQueue>();
+            services.AddSingleton<IJobQueue>(sp => sp.GetRequiredService<StubJobQueue>());
+
+            services.RemoveAll<IClassifierClient>();
+            services.AddSingleton<StubClassifier>();
+            services.AddSingleton<IClassifierClient>(sp => sp.GetRequiredService<StubClassifier>());
         });
     }
 

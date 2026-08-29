@@ -22,3 +22,12 @@ appsettings.*.local.json
 
 # macOS
 .DS_Store
+
+# Next.js
+web/node_modules/
+web/.next/
+web/.env.local
+web/next-env.d.ts
+
+# Dev runner output
+.dev-logs/

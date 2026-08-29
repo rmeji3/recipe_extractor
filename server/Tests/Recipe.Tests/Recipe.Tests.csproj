@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- See the note in Recipe.Api.csproj: keeps IDE build-host output out of the build. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj*/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

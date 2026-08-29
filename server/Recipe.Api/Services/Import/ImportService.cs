@@ -2,10 +2,11 @@ using Recipe.Api.Common;
 using Recipe.Api.Data.App;
 using Recipe.Api.Dtos.Import;
 using Recipe.Api.Models.Import;
+using Recipe.Api.Services.Queue;
 
 namespace Recipe.Api.Services.Import;
 
-public class ImportService(AppDbContext db, TimeProvider timeProvider) : IImportService
+public class ImportService(AppDbContext db, IJobQueue queue, TimeProvider timeProvider) : IImportService
 {
     public async Task<ImportSummaryDto> CreateAsync(
         string userId,
@@ -69,7 +70,33 @@ public class ImportService(AppDbContext db, TimeProvider timeProvider) : IImport
         db.ImportJobs.Add(job);
         await db.SaveChangesAsync(cancellationToken);
 
+        await EnqueueFollowUpAsync(job, cancellationToken);
+
         return ToSummary(job);
+    }
+
+    /// <summary>
+    /// Queues the work an import implies, so the caller never waits on it.
+    ///
+    /// TikTok posts need stage 1 before anything can judge or extract them, so those are
+    /// queued per post. Classification is queued once for the whole import: it batches a
+    /// hundred captions per model call and re-queues itself while work remains.
+    /// </summary>
+    private async Task EnqueueFollowUpAsync(ImportJob job, CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        if (job.Platform == SourcePlatform.TikTok)
+        {
+            await queue.EnqueueManyAsync(
+                job.Posts.Select(p => new Job(JobType.FetchMetadata, job.UserId, p.Id, 1, now)),
+                cancellationToken);
+        }
+
+        if (job.Posts.Count > 0)
+        {
+            await queue.EnqueueAsync(new Job(JobType.Classify, job.UserId, job.Id, 1, now), cancellationToken);
+        }
     }
 
     public async Task<ImportSummaryDto> GetAsync(
@@ -118,12 +145,16 @@ public class ImportService(AppDbContext db, TimeProvider timeProvider) : IImport
 
         var query = db.SavedPosts
             .Where(p => p.ImportJobId == importId)
-            .OrderByDescending(p => p.SavedAt)
+            // The ranked queue: most confidently food first, so real recipes are what the
+            // user sees while the uncertain tail is still being worked through.
+            .OrderByDescending(p => p.FoodConfidence)
+            .ThenByDescending(p => p.SavedAt)
             .ThenBy(p => p.Id)
             .Select(p => new SavedPostDto(
                 p.Id, p.Platform, p.PlatformItemId, p.Url, p.Kind, p.Caption,
                 p.CreatorHandle, p.CreatorName, p.Hashtags, p.SavedAt, p.CreatedAt,
-                p.MetadataStatus, p.ThumbnailUrl));
+                p.MetadataStatus, p.ThumbnailUrl,
+                p.ClassificationStatus, p.FoodConfidence, p.ClassifiedBy));
 
         return await PaginatedResult<SavedPostDto>.CreateAsync(query, pageNumber, pageSize, cancellationToken);
     }

@@ -34,6 +34,22 @@ public class Recipe
     /// <summary>Language Whisper detected, when the narration path ran.</summary>
     public string? TranscriptLanguage { get; set; }
 
+    /// <summary>
+    /// Flattened text the search index is built from: title, ingredient items, equipment,
+    /// creator. Maintained on every write rather than derived at query time, because the
+    /// real fields live in JSON columns that no provider can index usefully.
+    /// </summary>
+    public string SearchText { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Postgres full-text vector, generated from <see cref="SearchText"/>. Mapped only on
+    /// Npgsql — SQLite has no equivalent and ignores this property, falling back to LIKE.
+    /// </summary>
+    public NpgsqlTypes.NpgsqlTsVector? SearchVector { get; set; }
+
+    /// <summary>True once the user has edited any field by hand.</summary>
+    public bool IsEdited { get; set; }
+
     public DateTime? ExtractedAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

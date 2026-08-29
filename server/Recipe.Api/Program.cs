@@ -4,10 +4,13 @@ using Recipe.Api.Auth;
 using Recipe.Api.Data.App;
 using Recipe.Api.Middleware;
 using Recipe.Api.OpenApi;
+using Recipe.Api.Services.Classification;
 using Recipe.Api.Services.Extraction;
 using Recipe.Api.Services.Import;
 using Recipe.Api.Services.Metadata;
+using Recipe.Api.Services.Queue;
 using Recipe.Api.Services.Recipes;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -74,6 +77,26 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IImportService, ImportService>();
 builder.Services.AddScoped<IRecipeService, RecipeService>();
 builder.Services.AddScoped<IMetadataService, MetadataService>();
+builder.Services.AddScoped<IClassificationService, ClassificationService>();
+
+builder.Services.AddHttpClient<IClassifierClient, ClassifierClient>(client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["Sidecar:BaseUrl"] ?? "http://localhost:8000");
+    // A hundred captions in one call; generous, but nothing like a video download.
+    client.Timeout = TimeSpan.FromMinutes(3);
+});
+
+// Redis backs the job queue. The test fixture replaces both registrations, so a missing
+// Redis only matters for a real run.
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    var redis = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+    builder.Services.AddSingleton<IConnectionMultiplexer>(
+        _ => ConnectionMultiplexer.Connect(redis));
+    builder.Services.AddSingleton<IJobQueue, RedisJobQueue>();
+    builder.Services.AddHostedService<QueueWorker>();
+}
 
 // Follows share-sheet short links to the post they point at. Redirects are the whole
 // point here, so the handler must be allowed to follow them.

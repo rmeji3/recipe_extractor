@@ -24,8 +24,16 @@ public interface IRecipeService
 
     Task<RecipeDto> GetAsync(string userId, Guid recipeId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Lists a user's recipes, most confident first. <c>query</c> searches title,
+    /// ingredients, equipment, and creator; null or blank lists everything.
+    /// </summary>
     Task<PaginatedResult<RecipeSummaryDto>> ListAsync(
-        string userId, ExtractionStatus? status, int pageNumber, int pageSize,
+        string userId, ExtractionStatus? status, string? query, int pageNumber, int pageSize,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the user-editable fields of a recipe.</summary>
+    Task<RecipeDto> UpdateAsync(string userId, Guid recipeId, UpdateRecipeRequest request,
         CancellationToken cancellationToken = default);
 }
 
@@ -166,6 +174,7 @@ public class RecipeService(
         mine.FailureReason = null;
         mine.ExtractedAt = source.ExtractedAt;
         mine.UpdatedAt = now;
+        mine.SearchText = BuildSearchText(mine, post);
 
         await db.SaveChangesAsync(cancellationToken);
 
@@ -225,6 +234,7 @@ public class RecipeService(
             recipe.FailureReason = ex.Message;
         }
 
+        recipe.SearchText = BuildSearchText(recipe, post);
         await db.SaveChangesAsync(cancellationToken);
 
         return ToDto(recipe, post);
@@ -286,13 +296,29 @@ public class RecipeService(
     public Task<PaginatedResult<RecipeSummaryDto>> ListAsync(
         string userId,
         ExtractionStatus? status,
+        string? search,
         int pageNumber,
         int pageSize,
         CancellationToken cancellationToken = default)
     {
-        var query = db.Recipes
+        var rows = db.Recipes
             .Where(r => r.UserId == userId)
-            .Where(r => status == null || r.Status == status)
+            .Where(r => status == null || r.Status == status);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim();
+
+            rows = db.IsNpgsql
+                // Postgres does the real thing: stemming, ranking, GIN-indexed.
+                ? rows.Where(r => r.SearchVector!.Matches(EF.Functions.PlainToTsQuery("english", term)))
+                // SQLite has no full-text equivalent, and the suite runs on it. Substring
+                // matching is weaker — no stemming, so "tomatoes" will not find "tomato" —
+                // but it keeps tests provider-agnostic.
+                : rows.Where(r => EF.Functions.Like(r.SearchText, $"%{term}%"));
+        }
+
+        var query = rows
             .OrderByDescending(r => r.FoodConfidence)
             .ThenByDescending(r => r.UpdatedAt)
             .Select(r => new RecipeSummaryDto(
@@ -305,9 +331,71 @@ public class RecipeService(
                 r.FoodConfidence,
                 r.SavedPost!.CreatorHandle,
                 r.SavedPost.Url,
+                r.IsEdited,
                 r.UpdatedAt));
 
         return PaginatedResult<RecipeSummaryDto>.CreateAsync(query, pageNumber, pageSize, cancellationToken);
+    }
+
+    public async Task<RecipeDto> UpdateAsync(
+        string userId,
+        Guid recipeId,
+        UpdateRecipeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.Recipes
+            .Include(r => r.SavedPost)
+            .FirstOrDefaultAsync(r => r.Id == recipeId && r.UserId == userId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Recipe {recipeId} was not found.");
+
+        recipe.Title = request.Title.Trim();
+        recipe.Servings = request.Servings;
+        recipe.PrepMinutes = request.PrepMinutes;
+        recipe.CookMinutes = request.CookMinutes;
+
+        recipe.Ingredients = [.. request.Ingredients.Select(i => new RecipeIngredient(
+            i.Quantity, i.Unit, i.Item.Trim(), i.PrepNote,
+            // A value the user typed is certain by definition.
+            Confidence: 1.0, i.SourceTs))];
+
+        recipe.Steps = [.. request.Steps.Select(s => new RecipeStep(s.Text.Trim(), s.TsStart, s.TsEnd))];
+        recipe.Equipment = [.. request.Equipment.Select(e => e.Trim()).Where(e => e.Length > 0)];
+
+        // An edited recipe is one the user has corrected. Re-extraction must not silently
+        // undo that work, and a hand-written recipe is no longer "needs vision".
+        recipe.IsEdited = true;
+        recipe.Status = ExtractionStatus.Extracted;
+        recipe.FailureReason = null;
+        recipe.UpdatedAt = timeProvider.GetUtcNow().UtcDateTime;
+        recipe.SearchText = BuildSearchText(recipe, recipe.SavedPost);
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return ToDto(recipe, recipe.SavedPost);
+    }
+
+    /// <summary>
+    /// Flattens everything worth searching into one string. Ingredients and steps live in
+    /// JSON columns that no provider indexes usefully, so the searchable text is
+    /// maintained alongside them on every write.
+    /// </summary>
+    private static string BuildSearchText(RecipeEntity recipe, SavedPost? post)
+    {
+        var parts = new List<string> { recipe.Title };
+        parts.AddRange(recipe.Ingredients.Select(i => i.Item));
+        parts.AddRange(recipe.Equipment);
+
+        if (!string.IsNullOrWhiteSpace(post?.CreatorHandle))
+        {
+            parts.Add(post.CreatorHandle);
+        }
+
+        if (!string.IsNullOrWhiteSpace(post?.CreatorName))
+        {
+            parts.Add(post.CreatorName);
+        }
+
+        return string.Join(" ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
     }
 
     private static RecipeDto ToDto(RecipeEntity recipe, SavedPost? post) => new(
@@ -324,6 +412,7 @@ public class RecipeService(
         recipe.Equipment,
         recipe.FoodConfidence,
         recipe.TranscriptLanguage,
+        recipe.IsEdited,
         post?.CreatorHandle,
         post?.Url,
         recipe.ExtractedAt,

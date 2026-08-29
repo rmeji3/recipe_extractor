@@ -47,6 +47,19 @@ public class SavedPost
 
     public DateTime CreatedAt { get; set; }
 
+    public ClassificationStatus ClassificationStatus { get; set; }
+
+    /// <summary>
+    /// 0-1 confidence that this is a recipe. Drives the ranked queue: the user sees real
+    /// recipes appearing within a minute while the uncertain tail grinds behind them.
+    /// </summary>
+    public double FoodConfidence { get; set; }
+
+    /// <summary>How the verdict was reached — "keyword", "creator", or "model".</summary>
+    public string? ClassifiedBy { get; set; }
+
+    public DateTime? ClassifiedAt { get; set; }
+
     /// <summary>Stage 1 state. See <see cref="MetadataStatus"/>.</summary>
     public MetadataStatus MetadataStatus { get; set; }
 

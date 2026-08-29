@@ -8,6 +8,15 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- CS1591: not every public member needs a doc comment, only the ones that earn it. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!--
+      `bin*` and `obj*`, not `bin` and `obj`. The IDE's Roslyn language server writes into
+      a literal `bin\Debug` directory — one directory whose *name* contains a backslash,
+      which the SDK's `bin/**` exclude does not match. Its contents were globbed as project
+      content and copied a level deeper on every build, nesting until paths exceeded the
+      filesystem limit and the build failed outright. The wildcard catches it whatever the
+      IDE names it next.
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj*/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,6 +30,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="StackExchange.Redis" Version="3.1.31" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
   </ItemGroup>
 

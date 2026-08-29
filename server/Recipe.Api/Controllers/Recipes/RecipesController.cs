@@ -94,15 +94,20 @@ public class RecipesController(IRecipeService recipeService) : ControllerBase
         }
     }
 
-    /// <summary>Lists this user's recipes, most confident first.</summary>
-    /// <param name="status">Optional filter, e.g. <c>NeedsVision</c> to find the vision backlog.</param>
+    /// <summary>Lists and searches this user's recipes, most confident first.</summary>
     /// <param name="cancellationToken"></param>
+    /// <param name="q">
+    /// Free-text search across title, ingredients, equipment, and creator. Stemmed and
+    /// ranked on Postgres; substring matching on SQLite, which the test suite uses.
+    /// </param>
+    /// <param name="status">Optional filter, e.g. <c>NeedsVision</c> to find the vision backlog.</param>
     /// <param name="pageNumber"></param>
     /// <param name="pageSize"></param>
     [HttpGet]
     [ProducesResponseType(typeof(PaginatedResult<RecipeSummaryDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         CancellationToken cancellationToken,
+        [FromQuery] string? q = null,
         [FromQuery] ExtractionStatus? status = null,
         [FromQuery] int pageNumber = 1,
         [FromQuery] int pageSize = 20)
@@ -114,7 +119,45 @@ public class RecipesController(IRecipeService recipeService) : ControllerBase
             return Unauthorized();
         }
 
-        return Ok(await recipeService.ListAsync(userId, status, pageNumber, pageSize, cancellationToken));
+        return Ok(await recipeService.ListAsync(userId, status, q, pageNumber, pageSize, cancellationToken));
+    }
+
+    /// <summary>Replaces the user-editable fields of a recipe.</summary>
+    /// <remarks>
+    /// Send the whole recipe, not a delta. Edited recipes are flagged, and every ingredient
+    /// the user typed is recorded at full confidence.
+    /// </remarks>
+    /// <response code="200">The updated recipe.</response>
+    /// <response code="400">The payload failed validation.</response>
+    /// <response code="404">No such recipe for this user.</response>
+    [HttpPut("{id:guid}")]
+    [ProducesResponseType(typeof(RecipeDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Update(
+        Guid id,
+        [FromBody] UpdateRecipeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            return Ok(await recipeService.UpdateAsync(userId, id, request, cancellationToken));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (DomainValidationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     /// <summary>Returns one recipe in full.</summary>

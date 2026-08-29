@@ -193,5 +193,6 @@ public class MetadataService(
     private static SavedPostDto ToDto(SavedPost p) => new(
         p.Id, p.Platform, p.PlatformItemId, p.Url, p.Kind, p.Caption,
         p.CreatorHandle, p.CreatorName, p.Hashtags, p.SavedAt, p.CreatedAt,
-        p.MetadataStatus, p.ThumbnailUrl);
+        p.MetadataStatus, p.ThumbnailUrl,
+        p.ClassificationStatus, p.FoodConfidence, p.ClassifiedBy);
 }

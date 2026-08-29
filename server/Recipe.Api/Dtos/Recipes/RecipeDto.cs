@@ -17,6 +17,7 @@ public record RecipeDto(
     List<string> Equipment,
     double FoodConfidence,
     string? TranscriptLanguage,
+    bool IsEdited,
     string? CreatorHandle,
     string? SourceUrl,
     DateTime? ExtractedAt,
@@ -33,4 +34,5 @@ public record RecipeSummaryDto(
     double FoodConfidence,
     string? CreatorHandle,
     string? SourceUrl,
+    bool IsEdited,
     DateTime UpdatedAt);

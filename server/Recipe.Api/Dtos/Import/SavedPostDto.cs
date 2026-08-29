@@ -15,4 +15,8 @@ public record SavedPostDto(
     DateTime? SavedAt,
     DateTime CreatedAt,
     MetadataStatus MetadataStatus,
-    string? ThumbnailUrl);
+    string? ThumbnailUrl,
+    ClassificationStatus ClassificationStatus,
+    /// <summary>Drives the ranked queue — highest confidence is what the user sees first.</summary>
+    double FoodConfidence,
+    string? ClassifiedBy);
