@@ -1,0 +1,24 @@
+# Personal exports — real user data, never commit
+data/
+
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# .NET
+bin/
+obj/
+# A stray literal directory created by a Windows-style path leaking into a macOS
+# build. It nested recursively until paths exceeded the filesystem limit and the
+# build broke; ignored so it can never be committed if it reappears.
+bin\\Debug/
+*.user
+appsettings.*.local.json
+
+# macOS
+.DS_Store

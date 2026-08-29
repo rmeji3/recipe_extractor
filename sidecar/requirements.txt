@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.9      # multipart/form-data for direct uploads
+yt-dlp>=2025.1.1             # media fetch; update often, endpoints break
+faster-whisper>=1.1.0        # CTranslate2 Whisper — runs locally, no per-minute cost
+anthropic>=1.2.0
+pydantic>=2.9
+Pillow>=11.0
