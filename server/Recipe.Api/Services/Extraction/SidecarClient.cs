@@ -25,7 +25,10 @@ public record SidecarResult(
     [property: JsonPropertyName("recipe")] SidecarRecipe? Recipe,
     [property: JsonPropertyName("note")] string? Note,
     [property: JsonPropertyName("path")] string? Path = null,
-    [property: JsonPropertyName("frames_used")] int FramesUsed = 0);
+    [property: JsonPropertyName("frames_used")] int FramesUsed = 0,
+    /// <summary>The post's own description, read from the fetch.</summary>
+    [property: JsonPropertyName("caption")] string? Caption = null,
+    [property: JsonPropertyName("creator_handle")] string? CreatorHandle = null);
 
 public record SidecarTranscript(
     [property: JsonPropertyName("text")] string Text,
@@ -45,6 +48,7 @@ public record SidecarRecipe(
     [property: JsonPropertyName("food_confidence")] double FoodConfidence);
 
 public record SidecarIngredient(
+    [property: JsonPropertyName("group")] string? Group,
     [property: JsonPropertyName("quantity")] double? Quantity,
     [property: JsonPropertyName("unit")] string? Unit,
     [property: JsonPropertyName("item")] string Item,

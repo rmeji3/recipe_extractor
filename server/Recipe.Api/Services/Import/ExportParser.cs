@@ -23,8 +23,11 @@ public static partial class ExportParser
     [GeneratedRegex(@"instagram\.com/(p|reel|tv)/([^/?#]+)", RegexOptions.IgnoreCase)]
     private static partial Regex InstagramPermalink { get; }
 
-    /// <summary>TikTok share link: captures the numeric video id.</summary>
-    [GeneratedRegex(@"/video/(\d+)", RegexOptions.IgnoreCase)]
+    /// <summary>
+    /// TikTok share link: captures the numeric id. Photo posts are slideshows and appear
+    /// in exports the same way videos do.
+    /// </summary>
+    [GeneratedRegex(@"/(?:video|photo)/(\d+)", RegexOptions.IgnoreCase)]
     private static partial Regex TikTokVideoId { get; }
 
     /// <summary>
@@ -347,7 +350,9 @@ public static partial class ExportParser
             {
                 PlatformItemId = id,
                 Url = link,
-                Kind = SavedPostKind.Video,
+                Kind = link.Contains("/photo/", StringComparison.OrdinalIgnoreCase)
+                    ? SavedPostKind.Photo
+                    : SavedPostKind.Video,
                 // No caption and no creator on this path — nothing but a date and a link.
                 // Stage 1 metadata fetch fills those in later.
                 SavedAt = ReadTikTokDate(item)

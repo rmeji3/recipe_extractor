@@ -6,6 +6,7 @@ using Recipe.Api.Models.Import;
 using Recipe.Api.Models.Recipes;
 using Recipe.Api.Services.Extraction;
 using Recipe.Api.Services.Metadata;
+using Recipe.Api.Services.Queue;
 using RecipeEntity = Recipe.Api.Models.Recipes.Recipe;
 
 namespace Recipe.Api.Services.Recipes;
@@ -16,11 +17,24 @@ public interface IRecipeService
     Task<RecipeDto> ExtractAsync(string userId, Guid savedPostId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The share-sheet path: takes a bare link, adds it to the user's cookbook, and
-    /// returns a recipe. Serves an already-extracted result instantly when anyone has
-    /// processed the same video before.
+    /// The share-sheet path: takes a bare link, adds it to the user's cookbook, and returns
+    /// a recipe row immediately.
     /// </summary>
+    /// <remarks>
+    /// Returns <see cref="ExtractionStatus.Extracted"/> straight away when anyone has
+    /// already processed the same video — the cross-user cache makes that the common case
+    /// for anything popular. Otherwise the row comes back <see cref="ExtractionStatus.Processing"/>
+    /// with the work queued, and the caller polls <c>GET /api/recipes/{id}</c>. A cold
+    /// extraction takes up to a minute, which is longer than a phone will reliably hold a
+    /// request open.
+    /// </remarks>
     Task<RecipeDto> ExtractFromUrlAsync(string userId, string url, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Everything one queued post needs: stage 1 when its creator handle is missing, then
+    /// the extraction cascade. This is what the worker runs.
+    /// </summary>
+    Task<RecipeDto> ProcessAsync(string userId, Guid savedPostId, CancellationToken cancellationToken = default);
 
     Task<RecipeDto> GetAsync(string userId, Guid recipeId, CancellationToken cancellationToken = default);
 
@@ -42,6 +56,7 @@ public class RecipeService(
     ISidecarClient sidecar,
     IMetadataService metadata,
     IShortLinkResolver shortLinks,
+    IJobQueue queue,
     TimeProvider timeProvider) : IRecipeService
 {
     public async Task<RecipeDto> ExtractFromUrlAsync(
@@ -98,14 +113,58 @@ public class RecipeService(
             return ToDto(await CopyForUserAsync(cached, userId, post, now, cancellationToken), post);
         }
 
-        // Stage 1 first when the post has no creator handle: yt-dlp cannot address a
-        // TikTok video without it, so extraction would fail outright.
-        if (parsed.Platform == SourcePlatform.TikTok && string.IsNullOrWhiteSpace(post.CreatorHandle))
+        var existing = await db.Recipes.FirstOrDefaultAsync(r => r.SavedPostId == post.Id, cancellationToken);
+
+        // Already done, or already queued. Re-sharing a link must not queue the work twice.
+        if (existing is not null
+            && existing.Status is ExtractionStatus.Extracted or ExtractionStatus.Processing)
         {
-            await metadata.FetchAsync(userId, post.Id, cancellationToken);
+            return ToDto(existing, post);
         }
 
-        return await ExtractAsync(userId, post.Id, cancellationToken);
+        var recipe = existing ?? new RecipeEntity
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            SavedPostId = post.Id,
+            CreatedAt = now
+        };
+
+        if (existing is null)
+        {
+            db.Recipes.Add(recipe);
+        }
+
+        recipe.Status = ExtractionStatus.Processing;
+        recipe.FailureReason = null;
+        recipe.UpdatedAt = now;
+        recipe.SearchText = BuildSearchText(recipe, post);
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        await queue.EnqueueAsync(new Job(JobType.Extract, userId, post.Id, 1, now), cancellationToken);
+
+        return ToDto(recipe, post);
+    }
+
+    public async Task<RecipeDto> ProcessAsync(
+        string userId,
+        Guid savedPostId,
+        CancellationToken cancellationToken = default)
+    {
+        var post = await db.SavedPosts
+            .FirstOrDefaultAsync(p => p.Id == savedPostId && p.UserId == userId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Saved post {savedPostId} was not found.");
+
+        // yt-dlp cannot address a TikTok video without its creator handle, so stage 1 has
+        // to run first. On the share path the user pasted a link and expects a recipe, so
+        // this is handled rather than reported.
+        if (post.Platform == SourcePlatform.TikTok && string.IsNullOrWhiteSpace(post.CreatorHandle))
+        {
+            await metadata.FetchAsync(userId, savedPostId, cancellationToken);
+        }
+
+        return await ExtractAsync(userId, savedPostId, cancellationToken);
     }
 
     /// <summary>
@@ -224,6 +283,23 @@ public class RecipeService(
         try
         {
             var result = await sidecar.TranscribeAsync(url, post.Caption, cancellationToken);
+
+            // The fetch reads the post's own description on the way past. On the share
+            // path an Instagram post has no caption at all — nothing was uploaded and its
+            // oEmbed needs an app token — so this is the only place one ever arrives, and
+            // it is usually the only source carrying exact amounts.
+            if (string.IsNullOrWhiteSpace(post.Caption) && !string.IsNullOrWhiteSpace(result.Caption))
+            {
+                post.Caption = CaptionText.Normalise([result.Caption]);
+                post.MetadataStatus = MetadataStatus.Fetched;
+                post.MetadataFetchedAt = now;
+            }
+
+            if (string.IsNullOrWhiteSpace(post.CreatorHandle) && !string.IsNullOrWhiteSpace(result.CreatorHandle))
+            {
+                post.CreatorHandle = result.CreatorHandle;
+            }
+
             Apply(recipe, result, now);
         }
         catch (SidecarException ex)
@@ -273,7 +349,7 @@ public class RecipeService(
         recipe.Equipment = extracted.Equipment ?? [];
 
         recipe.Ingredients = [.. (extracted.Ingredients ?? []).Select(i =>
-            new RecipeIngredient(i.Quantity, i.Unit, i.Item, i.PrepNote, i.Confidence, i.SourceTs))];
+            new RecipeIngredient(i.Group, i.Quantity, i.Unit, i.Item, i.PrepNote, i.Confidence, i.SourceTs))];
 
         recipe.Steps = [.. (extracted.Steps ?? []).Select(s =>
             new RecipeStep(s.Text, s.TsStart, s.TsEnd))];
@@ -354,6 +430,7 @@ public class RecipeService(
         recipe.CookMinutes = request.CookMinutes;
 
         recipe.Ingredients = [.. request.Ingredients.Select(i => new RecipeIngredient(
+            string.IsNullOrWhiteSpace(i.Group) ? null : i.Group.Trim(),
             i.Quantity, i.Unit, i.Item.Trim(), i.PrepNote,
             // A value the user typed is certain by definition.
             Confidence: 1.0, i.SourceTs))];

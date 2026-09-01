@@ -4,6 +4,7 @@ using Recipe.Api.Auth;
 using Recipe.Api.Data.App;
 using Recipe.Api.Middleware;
 using Recipe.Api.OpenApi;
+using Recipe.Api.Services.Auth;
 using Recipe.Api.Services.Classification;
 using Recipe.Api.Services.Extraction;
 using Recipe.Api.Services.Import;
@@ -59,16 +60,54 @@ if (!builder.Environment.IsEnvironment("Testing"))
         options.UseNpgsql(builder.Configuration.GetConnectionString("AppDb")));
 }
 
+void ConfigureJwtBearer(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerOptions options)
+{
+    var key = builder.Configuration["Auth:Jwt:Key"];
+
+    options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidIssuer = builder.Configuration["Auth:Jwt:Issuer"] ?? "recipe-api",
+        ValidateAudience = true,
+        ValidAudience = builder.Configuration["Auth:Jwt:Audience"] ?? "recipe-app",
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = string.IsNullOrWhiteSpace(key)
+            ? null
+            : new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(
+                System.Text.Encoding.UTF8.GetBytes(key)),
+        ClockSkew = TimeSpan.FromMinutes(1)
+    };
+}
+
 if (useDevAuth)
 {
+    // Both schemes, chosen per request: a bearer token means a real signed-in user, and
+    // anything else falls back to the stub. Without this the dev handler would swallow
+    // every request and there would be no way to exercise real auth outside production.
     builder.Services
-        .AddAuthentication(DevAuthenticationHandler.SchemeName)
+        .AddAuthentication(options =>
+        {
+            options.DefaultScheme = "DevOrJwt";
+            options.DefaultChallengeScheme = "DevOrJwt";
+        })
+        .AddPolicyScheme("DevOrJwt", "Dev stub or JWT", options =>
+        {
+            options.ForwardDefaultSelector = context =>
+                context.Request.Headers.Authorization.ToString()
+                    .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                    ? Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme
+                    : DevAuthenticationHandler.SchemeName;
+        })
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DevAuthenticationHandler>(
-            DevAuthenticationHandler.SchemeName, _ => { });
+            DevAuthenticationHandler.SchemeName, _ => { })
+        .AddJwtBearer(ConfigureJwtBearer);
 }
 else
 {
-    builder.Services.AddAuthentication().AddJwtBearer();
+    builder.Services.AddAuthentication(
+            Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(ConfigureJwtBearer);
 }
 
 builder.Services.AddAuthorization();
@@ -78,6 +117,13 @@ builder.Services.AddScoped<IImportService, ImportService>();
 builder.Services.AddScoped<IRecipeService, RecipeService>();
 builder.Services.AddScoped<IMetadataService, MetadataService>();
 builder.Services.AddScoped<IClassificationService, ClassificationService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+
+builder.Services.AddHttpClient<IAppleTokenValidator, AppleTokenValidator>(client =>
+{
+    client.BaseAddress = new Uri("https://appleid.apple.com");
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
 
 builder.Services.AddHttpClient<IClassifierClient, ClassifierClient>(client =>
 {
@@ -123,6 +169,28 @@ builder.Services.AddHttpClient<ISidecarClient, SidecarClient>(client =>
         builder.Configuration["Sidecar:BaseUrl"] ?? "http://localhost:8000");
     client.Timeout = TimeSpan.FromMinutes(10);
 });
+
+// Fail at startup, not on the first sign-in. A missing signing key means the server
+// cannot mint tokens at all, and a missing Apple client id means it would accept tokens
+// minted for a different app entirely — both are deployment mistakes that must be loud
+// and immediate rather than a 500 for the first user who tries to sign in.
+if (!useDevAuth)
+{
+    var signingKey = builder.Configuration["Auth:Jwt:Key"];
+
+    if (string.IsNullOrWhiteSpace(signingKey) || signingKey.Length < 32)
+    {
+        throw new InvalidOperationException(
+            "Auth:Jwt:Key must be set to at least 32 characters outside Development.");
+    }
+
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Auth:Apple:ClientId"]))
+    {
+        throw new InvalidOperationException(
+            "Auth:Apple:ClientId must be set to the app's bundle id outside Development. "
+            + "Without it, an identity token issued for any other app would be accepted.");
+    }
+}
 
 var app = builder.Build();
 

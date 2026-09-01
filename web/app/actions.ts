@@ -9,6 +9,15 @@ export interface ActionState {
   recipe?: Recipe;
 }
 
+/** One poll. The client drives the loop so the page can show progress meanwhile. */
+export async function pollRecipe(id: string): Promise<Recipe | null> {
+  try {
+    return await api.get<Recipe>(`/api/recipes/${id}`);
+  } catch {
+    return null;
+  }
+}
+
 /** The core product flow: one link in, one recipe out. */
 export async function extractFromUrl(
   _previous: ActionState,
@@ -40,11 +49,21 @@ export async function reExtract(savedPostId: string, recipeId: string) {
 }
 
 export async function saveRecipe(recipeId: string, form: FormData) {
-  const ingredients = String(form.get("ingredients") ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map(parseIngredient);
+  const ingredients: ReturnType<typeof parseIngredient>[] = [];
+  let section: string | null = null;
+
+  for (const raw of String(form.get("ingredients") ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // "# Sauce" starts a section and is not itself an ingredient.
+    if (line.startsWith("#")) {
+      section = line.replace(/^#+\s*/, "").trim() || null;
+      continue;
+    }
+
+    ingredients.push({ ...parseIngredient(line), group: section });
+  }
 
   const steps = String(form.get("steps") ?? "")
     .split("\n")
@@ -88,7 +107,10 @@ function parseIngredient(line: string) {
   );
 
   if (!match || !match[3]) {
-    return { item: line, quantity: null, unit: null, prepNote: null, sourceTs: null };
+    return {
+      item: line, quantity: null, unit: null, prepNote: null, sourceTs: null,
+      group: null as string | null,
+    };
   }
 
   return {
@@ -97,5 +119,6 @@ function parseIngredient(line: string) {
     item: match[3].trim(),
     prepNote: null,
     sourceTs: null,
+    group: null as string | null,
   };
 }

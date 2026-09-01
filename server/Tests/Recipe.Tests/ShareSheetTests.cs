@@ -7,6 +7,7 @@ using Recipe.Api.Dtos.Recipes;
 using Recipe.Api.Models.Import;
 using Recipe.Api.Models.Recipes;
 using Recipe.Api.Services.Metadata;
+using Recipe.Api.Services.Queue;
 
 namespace Recipe.Tests;
 
@@ -44,8 +45,126 @@ public class ShareSheetTests(AppFixture fixture) : IClassFixture<AppFixture>
         Sidecar.Next = (_, _) => StubSidecar.Narrated();
     }
 
-    private static Task<HttpResponseMessage> Share(HttpClient client, string url) =>
-        client.PostAsJsonAsync("/api/recipes/from-url", new ExtractFromUrlRequest { Url = url });
+    /// <summary>Posts a link and drains the queue, so the result is settled to assert on.</summary>
+    private async Task<HttpResponseMessage> Share(HttpClient client, string url)
+    {
+        var response = await client.PostAsJsonAsync(
+            "/api/recipes/from-url", new ExtractFromUrlRequest { Url = url });
+
+        if (response.StatusCode == HttpStatusCode.Accepted)
+        {
+            await fixture.DrainQueueAsync();
+            var queued = await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+            return await client.GetAsync($"/api/recipes/{queued!.Id}");
+        }
+
+        return response;
+    }
+
+    // ------------------------------------------------- the async contract
+    //
+    // A phone cannot hold a request open for the minute a cold extraction takes: iOS
+    // suspends backgrounded apps and a wifi-to-cellular handoff kills the socket. The
+    // client posts, gets a row back immediately, and polls.
+
+    [Fact]
+    public async Task A_cold_link_returns_202_and_queues_the_work()
+    {
+        var client = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+        var queue = fixture.Services.GetRequiredService<StubJobQueue>();
+        queue.Clear();
+
+        var response = await client.PostAsJsonAsync("/api/recipes/from-url",
+            new ExtractFromUrlRequest { Url = "https://www.tiktok.com/@chef/video/8000000000000000001" });
+        var recipe = await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(ExtractionStatus.Processing, recipe!.Status);
+        // Location points at what to poll.
+        Assert.Equal($"/api/recipes/{recipe.Id}", response.Headers.Location?.ToString());
+        Assert.Single(queue.Enqueued, j => j.Type == JobType.Extract);
+    }
+
+    [Fact]
+    public async Task Polling_the_queued_recipe_settles_once_the_worker_runs()
+    {
+        var client = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+
+        var queued = await (await client.PostAsJsonAsync("/api/recipes/from-url",
+                new ExtractFromUrlRequest { Url = "https://www.tiktok.com/@chef/video/8000000000000000002" }))
+            .Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+
+        // Still Processing before the worker gets to it — the client would keep polling.
+        var before = await client.GetFromJsonAsync<RecipeDto>(
+            $"/api/recipes/{queued!.Id}", AppFixture.JsonOptions);
+        Assert.Equal(ExtractionStatus.Processing, before!.Status);
+
+        await fixture.DrainQueueAsync();
+
+        var after = await client.GetFromJsonAsync<RecipeDto>(
+            $"/api/recipes/{queued.Id}", AppFixture.JsonOptions);
+        Assert.Equal(ExtractionStatus.Extracted, after!.Status);
+        Assert.Equal(3, after.Ingredients.Count);
+    }
+
+    [Fact]
+    public async Task A_cache_hit_returns_200_with_no_waiting_at_all()
+    {
+        // The reason the cross-user cache is a speed story and not only a cost one: for
+        // anything popular the app can show a finished recipe with no progress state.
+        const string url = "https://www.tiktok.com/@chef/video/8000000000000000003";
+        var first = ClientFor(Guid.NewGuid().ToString());
+        var second = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+
+        await Share(first, url);
+
+        var queue = fixture.Services.GetRequiredService<StubJobQueue>();
+        queue.Clear();
+
+        var response = await second.PostAsJsonAsync("/api/recipes/from-url",
+            new ExtractFromUrlRequest { Url = url });
+        var recipe = await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ExtractionStatus.Extracted, recipe!.Status);
+        Assert.Empty(queue.Enqueued);
+    }
+
+    [Fact]
+    public async Task Sharing_the_same_link_twice_while_it_is_working_queues_once()
+    {
+        // A user tapping share twice, or a client retrying, must not double the cost.
+        var client = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+        var queue = fixture.Services.GetRequiredService<StubJobQueue>();
+        queue.Clear();
+
+        const string url = "https://www.tiktok.com/@chef/video/8000000000000000004";
+        await client.PostAsJsonAsync("/api/recipes/from-url", new ExtractFromUrlRequest { Url = url });
+        await client.PostAsJsonAsync("/api/recipes/from-url", new ExtractFromUrlRequest { Url = url });
+
+        Assert.Single(queue.Enqueued, j => j.Type == JobType.Extract);
+    }
+
+    [Fact]
+    public async Task A_bad_link_still_fails_fast_rather_than_queueing()
+    {
+        // Validation must not cost a round trip through the queue — the app should be able
+        // to tell the user immediately that a link is not a post.
+        var client = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+        var queue = fixture.Services.GetRequiredService<StubJobQueue>();
+        queue.Clear();
+
+        var response = await client.PostAsJsonAsync("/api/recipes/from-url",
+            new ExtractFromUrlRequest { Url = "https://example.com/nope" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(queue.Enqueued);
+    }
 
     [Fact]
     public async Task A_pasted_tiktok_link_becomes_a_recipe()
@@ -82,6 +201,44 @@ public class ShareSheetTests(AppFixture fixture) : IClassFixture<AppFixture>
         using var db = fixture.CreateDbContext();
         var post = db.SavedPosts.Single(p => p.Id == recipe!.SavedPostId);
         Assert.Equal("7000000000000000002", post.PlatformItemId);
+    }
+
+    [Fact]
+    public async Task A_tiktok_photo_post_is_accepted_and_rewritten_to_the_video_form()
+    {
+        // Photo posts are image slideshows and a real recipe format — the layout suits a
+        // typed ingredient list, so they often carry exact measurements. Neither oEmbed nor
+        // yt-dlp accepts the /photo/ path; both work on the /video/ rewrite.
+        var client = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+
+        var response = await Share(
+            client, "https://www.tiktok.com/@chefai.official/photo/7480626101908278534");
+        var recipe = await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var db = fixture.CreateDbContext();
+        var post = db.SavedPosts.Single(p => p.Id == recipe!.SavedPostId);
+        Assert.Equal("7480626101908278534", post.PlatformItemId);
+        Assert.Equal(SavedPostKind.Photo, post.Kind);
+        Assert.Equal("https://www.tiktok.com/@cj.eats/video/7480626101908278534", Sidecar.LastUrl);
+    }
+
+    [Fact]
+    public async Task A_photo_post_and_its_video_form_are_the_same_cached_item()
+    {
+        // Both spellings must reduce to one id, or the cross-user cache splits and the
+        // same recipe is extracted twice.
+        var client = ClientFor(Guid.NewGuid().ToString());
+        HappyPath();
+
+        var a = await (await Share(client, "https://www.tiktok.com/@chef/photo/7480626101908278535"))
+            .Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+        var b = await (await Share(client, "https://www.tiktok.com/@chef/video/7480626101908278535"))
+            .Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+
+        Assert.Equal(a!.SavedPostId, b!.SavedPostId);
     }
 
     [Fact]

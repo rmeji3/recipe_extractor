@@ -9,9 +9,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Recipe.Api.Data.App;
 using Recipe.Api.Services.Extraction;
+using Recipe.Api.Services.Auth;
 using Recipe.Api.Services.Classification;
 using Recipe.Api.Services.Metadata;
 using Recipe.Api.Services.Queue;
+using Recipe.Api.Services.Recipes;
 
 namespace Recipe.Tests;
 
@@ -36,6 +38,11 @@ public class AppFixture : WebApplicationFactory<Program>, IAsyncLifetime
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+
+        // A signing key long enough for HMAC-SHA256; the service refuses to mint tokens
+        // without one, which is deliberate.
+        builder.UseSetting("Auth:Jwt:Key", "test-signing-key-that-is-long-enough-to-be-valid");
+        builder.UseSetting("Auth:Apple:ClientId", "com.example.recipe");
 
         builder.ConfigureServices(services =>
         {
@@ -68,6 +75,12 @@ public class AppFixture : WebApplicationFactory<Program>, IAsyncLifetime
             services.AddSingleton<StubJobQueue>();
             services.AddSingleton<IJobQueue>(sp => sp.GetRequiredService<StubJobQueue>());
 
+            // Apple's signature check cannot run offline; everything built on top of a
+            // verified identity is exercised through this seam.
+            services.RemoveAll<IAppleTokenValidator>();
+            services.AddSingleton<StubAppleValidator>();
+            services.AddSingleton<IAppleTokenValidator>(sp => sp.GetRequiredService<StubAppleValidator>());
+
             services.RemoveAll<IClassifierClient>();
             services.AddSingleton<StubClassifier>();
             services.AddSingleton<IClassifierClient>(sp => sp.GetRequiredService<StubClassifier>());
@@ -82,6 +95,48 @@ public class AppFixture : WebApplicationFactory<Program>, IAsyncLifetime
     {
         var scope = Services.CreateScope();
         return scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    }
+
+    /// <summary>
+    /// Runs every queued job to completion, in order.
+    /// </summary>
+    /// <remarks>
+    /// Tests drain the queue deliberately rather than racing a background worker: the real
+    /// <c>QueueWorker</c> is not registered under Testing, so nothing runs until a test
+    /// asks for it. That keeps async behaviour assertable instead of timing-dependent.
+    /// </remarks>
+    public async Task DrainQueueAsync(int maxJobs = 50)
+    {
+        var queue = Services.GetRequiredService<IJobQueue>();
+
+        for (var i = 0; i < maxJobs; i++)
+        {
+            var job = await queue.DequeueAsync();
+
+            if (job is null)
+            {
+                return;
+            }
+
+            using var scope = Services.CreateScope();
+            var services = scope.ServiceProvider;
+
+            switch (job.Type)
+            {
+                case JobType.FetchMetadata:
+                    await services.GetRequiredService<IMetadataService>()
+                        .FetchAsync(job.UserId, job.TargetId);
+                    break;
+                case JobType.Classify:
+                    await services.GetRequiredService<IClassificationService>()
+                        .ClassifyPendingAsync(job.TargetId, ClassificationService.BatchSize);
+                    break;
+                case JobType.Extract:
+                    await services.GetRequiredService<IRecipeService>()
+                        .ProcessAsync(job.UserId, job.TargetId);
+                    break;
+            }
+        }
     }
 
     Task IAsyncLifetime.InitializeAsync()

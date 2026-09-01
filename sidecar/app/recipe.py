@@ -18,6 +18,10 @@ from .transcribe import Transcript
 
 
 class Ingredient(BaseModel):
+    group: Optional[str] = Field(
+        default=None,
+        description="The part of the dish this belongs to, e.g. 'Chicken', 'Sauce', "
+                    "'Marinade'. Null when the recipe has no sections.")
     quantity: Optional[float] = Field(default=None, description="Numeric amount, null if not stated.")
     unit: Optional[str] = Field(default=None, description="tbsp, g, cup, etc. Null if not stated.")
     item: str = Field(description="The ingredient itself, e.g. 'soy sauce'.")
@@ -57,6 +61,11 @@ user will cook from this.
 phrasing, jokes, sponsor reads, or calls to follow. State the action.
 - Ingredients: split quantity, unit, and item. "two tablespoons of low sodium soy sauce" \
 becomes quantity 2, unit "tbsp", item "soy sauce", prep_note "low sodium".
+- **Keep the recipe's own sections.** Creators write "For the Chicken:", "For the Sauce:", \
+"Marinade:" — set each ingredient's group from the heading it sits under, using a short \
+name ("Chicken", "Sauce", "Marinade"). Flattening them into one list makes a recipe with \
+a separate sauce much harder to cook from. Use null only when the source really is one \
+undivided list; never invent sections that are not there.
 - Transcripts are imperfect. When a word is clearly a mishearing of a cooking term, use \
 the cooking term, but lower that ingredient's confidence. When you genuinely cannot tell, \
 leave it out rather than guessing.
@@ -84,6 +93,11 @@ set it to null. Do not estimate one from how the food looks — a wrong quantity
 dinner, and a null is honest.
 - Take amounts from the caption when it has them; that is typed and reliable. Frames and \
 narration are for identifying ingredients and recovering the method.
+- **Keep the recipe's own sections.** Creators write "For the Chicken:", "For the Sauce:", \
+"Marinade:" — set each ingredient's group from the heading it sits under, using a short \
+name ("Chicken", "Sauce", "Marinade"). Flattening them into one list makes a recipe with \
+a separate sauce much harder to cook from. Use null only when the source really is one \
+undivided list; never invent sections that are not there.
 - Rewrite every step in plain, neutral instructional voice. Never copy the creator's \
 phrasing, jokes, or sponsor reads.
 - Ignore on-screen text that is not part of the recipe: hooks like "pov: you learned how \
@@ -104,11 +118,22 @@ def _client() -> anthropic.Anthropic:
 
 
 def build_prompt(transcript: Transcript, caption: str | None) -> str:
-    lines = [f"[{s.start:.1f}-{s.end:.1f}] {s.text}" for s in transcript.segments]
     parts = []
+
     if caption:
         parts.append(f"Caption the creator posted:\n\n{caption}")
-    parts.append("Timestamped transcript:\n\n" + ("\n".join(lines) or transcript.text))
+
+    lines = [f"[{s.start:.1f}-{s.end:.1f}] {s.text}" for s in transcript.segments]
+
+    if lines:
+        parts.append("Timestamped transcript:\n\n" + "\n".join(lines))
+    elif transcript.text.strip():
+        parts.append(f"Transcript:\n\n{transcript.text}")
+    else:
+        # Silent, or music only. Say so rather than presenting an empty transcript, which
+        # reads as a failed transcription instead of a video that never spoke.
+        parts.append("There is no narration — this video is silent or music-only.")
+
     return "\n\n---\n\n".join(parts)
 
 

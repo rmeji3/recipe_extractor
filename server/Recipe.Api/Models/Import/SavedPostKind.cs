@@ -13,5 +13,12 @@ public enum SavedPostKind
     /// <summary>Instagram <c>/reel/</c>.</summary>
     Reel = 2,
     /// <summary>TikTok video.</summary>
-    Video = 3
+    Video = 3,
+
+    /// <summary>
+    /// TikTok photo post — an image slideshow. A real recipe format, not an edge case:
+    /// the layout suits a typed ingredient list, so these often carry exact measurements
+    /// the video posts do not.
+    /// </summary>
+    Photo = 4
 }

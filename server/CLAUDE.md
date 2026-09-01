@@ -1,8 +1,9 @@
 # Server — Code Guidelines
 
-> **Status: one domain built.** `Import` is a complete vertical slice — entity, DTOs,
-> service, controller, migration, tests — and everything below describes real files.
-> `Recipe` and `Classification` are still targets.
+> **Status: the pipeline and authentication are complete.** `Import`, `Metadata` (stage 1),
+> `Classification`, `Recipes`, and `Auth` are all built, with a Redis-backed queue behind
+> them and a Python sidecar for transcription and vision. Everything below describes real
+> files. Not built: rate limiting, metrics, deployment.
 
 ASP.NET Core (.NET 10) API with EF Core. **Postgres in production, SQLite in tests** —
 keep queries provider-agnostic. Once a folder has real files in it, read the
@@ -29,11 +30,20 @@ normalised post arrays from on-device zip parsing), `Recipe` (the extraction sch
 ## Local run
 
 `dotnet run --project Recipe.Api` serves Swagger UI at `/swagger` and the OpenAPI
-document at `/openapi/v1.json`, both Development-only. Under Development and Testing,
-`DevAuthenticationHandler` authenticates every request as `dev-user` so authorized
-endpoints are reachable without a token; send an `X-Dev-User` header to act as someone
-else. **It is registered only under those two environments** — production gets JWT
-bearer, and registering the dev handler there would make every endpoint public.
+document at `/openapi/v1.json`, both Development-only.
+
+**Authentication runs two schemes under Development and Testing**, chosen per request: an
+`Authorization: Bearer` header goes to JWT validation, anything else falls back to
+`DevAuthenticationHandler`, which authenticates as `dev-user` (or whoever `X-Dev-User`
+names). That keeps the web client working with no login while still letting real
+Sign-in-with-Apple tokens be exercised. **The dev handler is registered only under those
+two environments** — production is JWT-only, and registering the stub there would make
+every endpoint public.
+
+**Production refuses to start** without `Auth:Jwt:Key` (32+ characters) and
+`Auth:Apple:ClientId`. Both are deployment mistakes that must be loud: no key means no
+tokens, and no client id means an identity token minted for *any other app* would be
+accepted.
 
 Endpoints need Postgres (`ConnectionStrings:AppDb`); with no database reachable, writes
 return 500 by design.
@@ -68,6 +78,36 @@ detect-don't-assume parsing are load-bearing.
   query (`from u in users.Where(...).DefaultIfEmpty()`) rather than a follow-up
   lookup per row.
 - XML doc comments (`/// <summary>`) on controller actions.
+
+## Auth
+
+Sign in with Apple only. The client authorizes on device and posts the `identityToken`;
+the server verifies it against Apple's published signing keys and this app's bundle id
+before creating anything. Trusting the token body without checking the signature would
+let anyone sign in as anyone.
+
+- **Apple's `sub` is the identity**, not the email — an email can be a private relay
+  address and can change.
+- **Apple sends the name and email on the first authorization only.** Fill gaps on later
+  sign-ins, never overwrite what is already stored, or a reinstall silently erases them.
+- **Refresh tokens are stored as SHA-256 hashes and rotated on every use.** A leaked table
+  must not hand anyone a live session, and rotation limits a stolen token to one use.
+- **Access tokens cannot be revoked** — they are trusted until they expire (1 hour).
+  Sign-out revokes the refresh token; it is not instant logout.
+
+## Long work is queued, never awaited
+
+`POST /api/recipes/from-url` returns **202 with a `Processing` row**, and the client polls
+`GET /api/recipes/{id}`. It does not wait for the extraction.
+
+That is not an optimisation. A cold extraction fetches, transcribes, and reads a video —
+up to a minute — and the client is a phone: iOS suspends backgrounded apps, and a
+wifi-to-cellular handoff kills the socket. Anything that can take more than a couple of
+seconds belongs on the queue with a status the client can poll.
+
+A cross-user cache hit still returns **200 `Extracted`** immediately, so the common path
+for a popular video has no waiting at all. Keep that distinction — the app is designed
+around it.
 
 ## API compatibility
 

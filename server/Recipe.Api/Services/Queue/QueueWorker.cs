@@ -82,8 +82,10 @@ public class QueueWorker(
                     break;
 
                 case JobType.Extract:
+                    // ProcessAsync, not ExtractAsync: a queued post may still need stage 1
+                    // before its video can be located at all.
                     await services.GetRequiredService<IRecipeService>()
-                        .ExtractAsync(job.UserId, job.TargetId, stoppingToken);
+                        .ProcessAsync(job.UserId, job.TargetId, stoppingToken);
                     break;
             }
         }

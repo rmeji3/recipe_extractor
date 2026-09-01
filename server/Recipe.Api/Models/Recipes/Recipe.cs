@@ -55,6 +55,11 @@ public class Recipe
     public DateTime UpdatedAt { get; set; }
 }
 
+/// <param name="Group">
+/// The part of the dish this belongs to — "Chicken", "Sauce", "Marinade" — taken from the
+/// recipe's own headings. Null when the source is one undivided list. Flattening a recipe
+/// that has a separate sauce makes it materially harder to cook from.
+/// </param>
 /// <param name="Quantity">Numeric amount, null when the source never stated one.</param>
 /// <param name="Unit">tbsp, g, cup. Null when unstated.</param>
 /// <param name="Item">The ingredient itself, e.g. "soy sauce".</param>
@@ -68,6 +73,7 @@ public class Recipe
 /// is already being processed, and what later lets a user tap an amount and jump to it.
 /// </param>
 public record RecipeIngredient(
+    string? Group,
     double? Quantity,
     string? Unit,
     string Item,

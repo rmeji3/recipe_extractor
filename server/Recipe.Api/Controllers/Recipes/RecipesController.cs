@@ -30,10 +30,15 @@ public class RecipesController(IRecipeService recipeService) : ControllerBase
     /// extracted the same video, the stored result is served immediately — no fetch, no
     /// transcription, no model call.
     /// </remarks>
-    /// <response code="200">A recipe, or a status explaining why there is not one yet.</response>
+    /// <response code="200">Already extracted — the shared cache had it. Ready to read.</response>
+    /// <response code="202">
+    /// Queued. The body carries the recipe row with <c>status: "Processing"</c>; poll
+    /// <c>GET /api/recipes/{id}</c> until it settles.
+    /// </response>
     /// <response code="400">The link could not be read as a TikTok or Instagram post.</response>
     [HttpPost("from-url")]
     [ProducesResponseType(typeof(RecipeDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(RecipeDto), StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> FromUrl(
         [FromBody] ExtractFromUrlRequest request,
@@ -48,7 +53,11 @@ public class RecipesController(IRecipeService recipeService) : ControllerBase
 
         try
         {
-            return Ok(await recipeService.ExtractFromUrlAsync(userId, request.Url, cancellationToken));
+            var recipe = await recipeService.ExtractFromUrlAsync(userId, request.Url, cancellationToken);
+
+            return recipe.Status == ExtractionStatus.Processing
+                ? Accepted($"/api/recipes/{recipe.Id}", recipe)
+                : Ok(recipe);
         }
         catch (DomainValidationException ex)
         {

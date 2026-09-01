@@ -47,9 +47,9 @@ public class StubSidecar : ISidecarClient
             CookMinutes: 15,
             Ingredients:
             [
-                new SidecarIngredient(2, "tbsp", "soy sauce", "low sodium", 0.9, 12.5),
-                new SidecarIngredient(null, null, "chicken tenders", null, 0.85, 9.1),
-                new SidecarIngredient(1, "tsp", "garlic powder", null, 0.8, 13.3)
+                new SidecarIngredient("Sauce", 2, "tbsp", "soy sauce", "low sodium", 0.9, 12.5),
+                new SidecarIngredient("Chicken", null, null, "chicken tenders", null, 0.85, 9.1),
+                new SidecarIngredient("Chicken", 1, "tsp", "garlic powder", null, 0.8, 13.3)
             ],
             Steps:
             [
@@ -85,9 +85,9 @@ public class StubSidecar : ISidecarClient
             CookMinutes: null,
             Ingredients:
             [
-                new SidecarIngredient(null, null, "chicken", null, 0.8, null),
-                new SidecarIngredient(null, null, "rice", null, 0.85, null),
-                new SidecarIngredient(null, null, "cumin", null, 0.95, null)
+                new SidecarIngredient(null, null, null, "chicken", null, 0.8, null),
+                new SidecarIngredient(null, null, null, "rice", null, 0.85, null),
+                new SidecarIngredient(null, null, null, "cumin", null, 0.95, null)
             ],
             Steps:
             [
@@ -158,6 +158,45 @@ public class RecipeExtractionTests(AppFixture fixture) : IClassFixture<AppFixtur
         Assert.Equal(3, recipe.Ingredients.Count);
         Assert.Equal(2, recipe.Steps.Count);
         Assert.Equal(4, recipe.Servings);
+    }
+
+    [Fact]
+    public async Task Extract_keeps_the_recipes_own_ingredient_sections()
+    {
+        // Creators write "For the Chicken:" / "For the Sauce:". Flattening those makes a
+        // recipe with a separate sauce much harder to cook from.
+        var client = ClientFor(Guid.NewGuid().ToString());
+        var postId = await ImportPost(client, SourcePlatform.TikTok, "e12", "somechef");
+        Sidecar.Throws = null;
+        Sidecar.Next = (_, _) => StubSidecar.Narrated();
+
+        var response = await client.PostAsync($"/api/recipes/extract/{postId}", null);
+        var recipe = await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+
+        Assert.Equal(["Sauce", "Chicken", "Chicken"], recipe!.Ingredients.Select(i => i.Group));
+    }
+
+    [Fact]
+    public async Task The_fetched_description_becomes_the_posts_caption()
+    {
+        // On the share path an Instagram post arrives with no caption at all — nothing was
+        // uploaded, and its oEmbed needs an app token. The description read during the
+        // fetch is the only caption that ever arrives, and the only source with amounts.
+        var client = ClientFor(Guid.NewGuid().ToString());
+        var postId = await ImportPost(client, SourcePlatform.Instagram, "e13", handle: null);
+        Sidecar.Throws = null;
+        Sidecar.Next = (_, _) => StubSidecar.Narrated() with
+        {
+            Caption = "High Protein Honey Garlic Chicken\n800g chicken breast",
+            CreatorHandle = "jalalsamfit",
+        };
+
+        await client.PostAsync($"/api/recipes/extract/{postId}", null);
+
+        using var db = fixture.CreateDbContext();
+        var post = db.SavedPosts.Single(p => p.Id == postId);
+        Assert.Contains("800g chicken breast", post.Caption);
+        Assert.Equal("jalalsamfit", post.CreatorHandle);
     }
 
     [Fact]

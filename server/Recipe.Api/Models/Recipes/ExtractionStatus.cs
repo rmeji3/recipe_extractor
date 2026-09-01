@@ -22,5 +22,13 @@ public enum ExtractionStatus
     Failed = 3,
 
     /// <summary>Processed, but the content turned out not to be a recipe at all.</summary>
-    NotARecipe = 4
+    NotARecipe = 4,
+
+    /// <summary>
+    /// Queued and being worked on. A cold extraction fetches, transcribes, and reads a
+    /// video, which takes up to a minute — far too long to hold an HTTP request open for a
+    /// phone that may be backgrounded or switching networks mid-call. The client gets this
+    /// immediately and polls.
+    /// </summary>
+    Processing = 5
 }

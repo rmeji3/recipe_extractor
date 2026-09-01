@@ -89,28 +89,33 @@ export default async function RecipePage({
       {recipe.ingredients.length === 0 ? (
         <p className="muted">None found.</p>
       ) : (
-        <table className="recipe">
-          <tbody>
-            {recipe.ingredients.map((ingredient, index) => (
-              <tr key={index}>
-                <td className="qty mono">
-                  {ingredient.quantity ?? ""} {ingredient.unit ?? ""}
-                </td>
-                <td>
-                  {ingredient.item}
-                  {ingredient.prepNote && (
-                    <span className="muted"> — {ingredient.prepNote}</span>
-                  )}
-                  {ingredient.confidence < 0.8 && (
-                    <span className="tag warn" style={{ marginLeft: "0.5rem" }}>
-                      unsure
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        groupIngredients(recipe.ingredients).map(([section, items]) => (
+          <div key={section ?? "_"}>
+            {section && <h3 className="section">{section}</h3>}
+            <table className="recipe">
+              <tbody>
+                {items.map((ingredient, index) => (
+                  <tr key={index}>
+                    <td className="qty mono">
+                      {ingredient.quantity ?? ""} {ingredient.unit ?? ""}
+                    </td>
+                    <td>
+                      {ingredient.item}
+                      {ingredient.prepNote && (
+                        <span className="muted"> — {ingredient.prepNote}</span>
+                      )}
+                      {ingredient.confidence < 0.8 && (
+                        <span className="tag warn" style={{ marginLeft: "0.5rem" }}>
+                          unsure
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))
       )}
 
       <h2>Method</h2>
@@ -137,6 +142,27 @@ export default async function RecipePage({
       )}
     </>
   );
+}
+
+/**
+ * Groups ingredients by their section, preserving first-appearance order.
+ *
+ * Deliberately not sorted: the order the creator listed the sections in is the order you
+ * cook them, so a marinade that comes first should stay first.
+ */
+function groupIngredients(
+  ingredients: Recipe["ingredients"],
+): [string | null, Recipe["ingredients"]][] {
+  const groups = new Map<string | null, Recipe["ingredients"]>();
+
+  for (const ingredient of ingredients) {
+    const key = ingredient.group?.trim() || null;
+    const existing = groups.get(key);
+    if (existing) existing.push(ingredient);
+    else groups.set(key, [ingredient]);
+  }
+
+  return [...groups.entries()];
 }
 
 function explain(recipe: Recipe): string {

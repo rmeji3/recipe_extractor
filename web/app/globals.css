@@ -148,3 +148,12 @@ ol.steps li { margin-bottom: 0.55rem; }
 .stats { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 0.5rem 0 0; }
 .stats div { display: flex; flex-direction: column; }
 .stats b { font-size: 1.35rem; font-weight: 650; }
+
+h3.section {
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 1.1rem 0 0.35rem;
+}

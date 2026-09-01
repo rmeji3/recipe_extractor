@@ -38,14 +38,17 @@ public class RecipeSearchAndEditTests(AppFixture fixture) : IClassFixture<AppFix
         Transcript: new SidecarTranscript("spoken", "en", 30, IsSpeech: true),
         Recipe: new SidecarRecipe(
             IsRecipe: true, Title: title, Servings: 2, PrepMinutes: 5, CookMinutes: 10,
-            Ingredients: [.. items.Select(i => new SidecarIngredient(1, "cup", i, null, 0.9, 1.0))],
+            Ingredients: [.. items.Select(i => new SidecarIngredient(null, 1, "cup", i, null, 0.9, 1.0))],
             Steps: [new SidecarStep("Cook it.", 1, 2), new SidecarStep("Serve it.", 3, 4)],
             Equipment: ["pan"],
             FoodConfidence: 0.9),
         Note: null,
         Path: "narration");
 
-    /// <summary>Shares a link and returns the created recipe.</summary>
+    /// <summary>
+    /// Shares a link and waits for it. Extraction is queued now, so the response is a
+    /// Processing row until the worker has run — here, until the test drains the queue.
+    /// </summary>
     private async Task<RecipeDto> Add(HttpClient client, string itemId, SidecarResult result)
     {
         OEmbed.Throw = null;
@@ -56,7 +59,17 @@ public class RecipeSearchAndEditTests(AppFixture fixture) : IClassFixture<AppFix
         var response = await client.PostAsJsonAsync("/api/recipes/from-url",
             new ExtractFromUrlRequest { Url = $"https://www.tiktok.com/@chef/video/{itemId}" });
 
-        return (await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions))!;
+        var recipe = (await response.Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions))!;
+
+        if (recipe.Status != ExtractionStatus.Processing)
+        {
+            return recipe;
+        }
+
+        await fixture.DrainQueueAsync();
+
+        return (await client.GetFromJsonAsync<RecipeDto>(
+            $"/api/recipes/{recipe.Id}", AppFixture.JsonOptions))!;
     }
 
     private static Task<PaginatedResult<RecipeSummaryDto>?> Search(HttpClient client, string term) =>
@@ -202,9 +215,13 @@ public class RecipeSearchAndEditTests(AppFixture fixture) : IClassFixture<AppFix
         OEmbed.Respond = _ => StubOEmbed.Result();
         Sidecar.Next = (_, _) => StubSidecar.Silent();
 
-        var created = await (await client.PostAsJsonAsync("/api/recipes/from-url",
+        var queued = await (await client.PostAsJsonAsync("/api/recipes/from-url",
                 new ExtractFromUrlRequest { Url = "https://www.tiktok.com/@chef/video/9100000000000000003" }))
             .Content.ReadFromJsonAsync<RecipeDto>(AppFixture.JsonOptions);
+        await fixture.DrainQueueAsync();
+
+        var created = await client.GetFromJsonAsync<RecipeDto>(
+            $"/api/recipes/{queued!.Id}", AppFixture.JsonOptions);
         Assert.Equal(ExtractionStatus.NeedsVision, created!.Status);
         Assert.False(created.IsEdited);
 

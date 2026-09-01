@@ -15,7 +15,18 @@ namespace Recipe.Api.Common;
 /// </remarks>
 public static partial class PostUrl
 {
-    [GeneratedRegex(@"tiktok(?:v)?\.com/(?:@[^/]+/)?(?:share/)?video/(\d+)", RegexOptions.IgnoreCase)]
+    /// <summary>
+    /// Matches every TikTok post shape, including <c>/photo/</c>.
+    /// </summary>
+    /// <remarks>
+    /// Photo posts are image slideshows, and creators use them for recipes precisely
+    /// because the format suits a typed ingredient list — the sample that exposed this had
+    /// exact measurements in its caption. Neither oEmbed nor yt-dlp accepts the
+    /// <c>/photo/</c> path itself; both work once the id is rewritten to the
+    /// <c>/video/</c> form, which is what <see cref="Parsed.CanonicalUrl"/> produces.
+    /// </remarks>
+    [GeneratedRegex(@"tiktok(?:v)?\.com/(?:@[^/]+/)?(?:share/)?(?:video|photo|v)/(\d+)",
+        RegexOptions.IgnoreCase)]
     private static partial Regex TikTokVideo { get; }
 
     [GeneratedRegex(@"instagram\.com/(p|reel|reels|tv)/([A-Za-z0-9_-]+)", RegexOptions.IgnoreCase)]
@@ -53,7 +64,9 @@ public static partial class PostUrl
             parsed = new Parsed(
                 SourcePlatform.TikTok,
                 id,
-                SavedPostKind.Video,
+                url.Contains("/photo/", StringComparison.OrdinalIgnoreCase)
+                    ? SavedPostKind.Photo
+                    : SavedPostKind.Video,
                 // Not yt-dlp's form: that one needs the creator handle, which is only known
                 // after stage 1. This is the id-only form oEmbed accepts.
                 $"https://www.tiktok.com/video/{id}");

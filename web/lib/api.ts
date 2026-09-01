@@ -50,12 +50,19 @@ export const api = {
 // ---------------------------------------------------------------- API shapes
 
 export type ExtractionStatus =
-  | "Pending" | "Extracted" | "NeedsVision" | "Failed" | "NotARecipe";
+  | "Pending" | "Extracted" | "NeedsVision" | "Failed" | "NotARecipe" | "Processing";
+
+/** Statuses that will not change without another extraction run. */
+export const SETTLED: ExtractionStatus[] = [
+  "Extracted", "NeedsVision", "Failed", "NotARecipe",
+];
 
 export type ClassificationStatus =
   | "Pending" | "Food" | "Uncertain" | "NotFood" | "Unclassifiable";
 
 export interface Ingredient {
+  /** Section of the dish — "Sauce", "Marinade". Null when the recipe is one list. */
+  group: string | null;
   quantity: number | null;
   unit: string | null;
   item: string;

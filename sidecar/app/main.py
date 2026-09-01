@@ -83,9 +83,15 @@ class ExtractionOut(BaseModel):
     note: Optional[str] = None
     path: str = Field(
         default="caption",
-        description="Which route produced the recipe: 'narration', 'vision', or 'none'.")
+        description="Which route produced the recipe: 'caption', 'narration', 'vision', or 'none'.")
     frames_used: int = Field(
         default=0, description="Frames sent to the model. Zero on the audio-only path.")
+    caption: Optional[str] = Field(
+        default=None,
+        description="The post's own description, read from the fetch. On Instagram this is "
+                    "the only way to get a caption for a shared link, and it is usually the "
+                    "only source that carries exact amounts. Worth storing.")
+    creator_handle: Optional[str] = Field(default=None)
 
 
 def _to_out(transcript: Transcript) -> TranscriptOut:
@@ -123,14 +129,23 @@ def _process(
 ) -> ExtractionOut:
     transcript = transcribe(media.audio)
 
+    # The caller's caption wins when it has one — it came from an export or from stage 1,
+    # and is already normalised. Otherwise use what the fetch turned up, which for a
+    # shared Instagram link is the only caption that exists.
+    caption = caption or media.description
+
     recipe: Optional[Recipe] = None
     note: Optional[str] = None
     path = "none"
     frames_used = 0
 
-    if structure and transcript.is_speech:
+    if structure and (transcript.is_speech or caption):
+        # The caption alone is often the whole recipe — creators type ingredient lists with
+        # exact amounts, and photo/slideshow posts in particular carry almost nothing else.
+        # Gating this on narration skipped the cheapest and most accurate source there is,
+        # and sent a post whose caption already held every measurement to the vision model.
         recipe = extract(transcript, caption)
-        path = "narration"
+        path = "narration" if transcript.is_speech else "caption"
 
     # Escalate when narration produced nothing, or produced too little to cook from.
     if structure and vision and _thin(recipe):
@@ -166,6 +181,8 @@ def _process(
         note=note,
         path=path,
         frames_used=frames_used,
+        caption=media.description,
+        creator_handle=media.uploader,
     )
 
 

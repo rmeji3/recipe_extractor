@@ -38,6 +38,10 @@ public record UpdateRecipeRequest
 
 public record UpdateIngredient
 {
+    /// <summary>Section heading, e.g. "Sauce". Null for an undivided list.</summary>
+    [StringLength(64)]
+    public string? Group { get; init; }
+
     [Range(0, 100000)]
     public double? Quantity { get; init; }
 

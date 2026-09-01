@@ -15,9 +15,23 @@ import type { Recipe } from "@/lib/api";
 export function EditForm({ recipe }: { recipe: Recipe }) {
   const [saving, setSaving] = useState(false);
 
-  const ingredients = recipe.ingredients
-    .map((i) => [i.quantity ?? "", i.unit ?? "", i.item].filter(Boolean).join(" "))
-    .join("\n");
+  // Sections round-trip as "# Sauce" headings. A textarea is still the fastest way to fix
+  // a list, and losing the groups on save would undo what extraction got right.
+  const lines: string[] = [];
+  let section: string | null = null;
+
+  for (const ingredient of recipe.ingredients) {
+    const group = ingredient.group?.trim() || null;
+    if (group !== section) {
+      section = group;
+      if (group) lines.push(`${lines.length ? "\n" : ""}# ${group}`);
+    }
+    lines.push([ingredient.quantity ?? "", ingredient.unit ?? "", ingredient.item]
+      .filter(Boolean)
+      .join(" "));
+  }
+
+  const ingredients = lines.join("\n");
 
   return (
     <form action={saveRecipe.bind(null, recipe.id)} onSubmit={() => setSaving(true)}>
@@ -53,7 +67,7 @@ export function EditForm({ recipe }: { recipe: Recipe }) {
         <label>
           <div className="small muted">
             Ingredients — one per line, e.g. “2 tbsp soy sauce”. Leave the amount off if the
-            video never said one.
+            video never said one. Start a line with <code># Sauce</code> to begin a section.
           </div>
           <textarea name="ingredients" rows={12} defaultValue={ingredients} />
         </label>

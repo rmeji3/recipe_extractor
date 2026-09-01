@@ -35,6 +35,13 @@ class Media:
     source_id: str | None
     video: pathlib.Path | None = None
 
+    #: The post's own description and author, read from the fetch that was happening
+    #: anyway. This is the only way to get an Instagram caption on the share-sheet path —
+    #: nothing is uploaded there, so there is no export to read it from, and Instagram's
+    #: oEmbed needs an app token.
+    description: str | None = None
+    uploader: str | None = None
+
 
 @dataclass(frozen=True)
 class Audio:
@@ -62,6 +69,23 @@ def workspace():
         yield directory
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+def read_info(directory: pathlib.Path) -> tuple[str | None, str | None]:
+    """Reads description and author out of yt-dlp's sidecar info file, if it wrote one."""
+    for info_file in sorted(directory.glob("*.info.json")):
+        try:
+            info = json.loads(info_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        description = (info.get("description") or "").strip() or None
+        # `channel` is the handle on Instagram; `uploader` is the display name there but
+        # the handle on TikTok, so prefer channel and fall back.
+        uploader = info.get("channel") or info.get("uploader")
+        return description, uploader
+
+    return None, None
 
 
 def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
@@ -94,7 +118,7 @@ def download_video(url: str, directory: pathlib.Path) -> pathlib.Path:
     """
     template = str(directory / "video.%(ext)s")
     result = _run(
-        ["yt-dlp", "--no-playlist", "--no-warnings",
+        ["yt-dlp", "--no-playlist", "--no-warnings", "--write-info-json",
          "-f", "mp4/best", "--output", template, url],
         timeout=420,
     )
@@ -103,8 +127,12 @@ def download_video(url: str, directory: pathlib.Path) -> pathlib.Path:
         message = (result.stderr or result.stdout).strip().splitlines()
         raise MediaError(f"could not fetch media: {message[-1][:300] if message else 'unknown error'}")
 
+    # Skip yt-dlp's own sidecar files. `video.info.json` sorts before `video.mp4`, so a
+    # naive "first match" hands ffmpeg a JSON file and fails with a decoding error that
+    # says nothing about the real cause.
     for candidate in sorted(directory.glob("video.*")):
-        return candidate
+        if candidate.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".m4v"}:
+            return candidate
 
     raise MediaError("fetch produced no video file")
 
@@ -124,6 +152,8 @@ def download_audio(url: str, directory: pathlib.Path) -> pathlib.Path:
             "--no-warnings",
             "--extract-audio",
             "--audio-format", "wav",
+            # Costs nothing on a fetch already happening, and carries the caption.
+            "--write-info-json",
             # Whisper wants 16 kHz mono; asking yt-dlp for it avoids a second pass.
             "--postprocessor-args", "ffmpeg:-ac 1 -ar 16000",
             "--output", template,
@@ -167,6 +197,9 @@ def prepare(directory: pathlib.Path, *, url: str | None = None,
     """
     video: pathlib.Path | None = None
 
+    description: str | None = None
+    uploader: str | None = None
+
     if url:
         source_id = platform_id(url)
         if want_video:
@@ -174,6 +207,7 @@ def prepare(directory: pathlib.Path, *, url: str | None = None,
             audio = extract_audio(video, directory)
         else:
             audio = download_audio(url, directory)
+        description, uploader = read_info(directory)
     elif upload:
         source_id = None
         audio = transcode_upload(upload, directory)
@@ -188,4 +222,11 @@ def prepare(directory: pathlib.Path, *, url: str | None = None,
             f"{MAX_DURATION_SECONDS / 60:.0f}"
         )
 
-    return Media(audio=audio, duration_seconds=duration, source_id=source_id, video=video)
+    return Media(
+        audio=audio,
+        duration_seconds=duration,
+        source_id=source_id,
+        video=video,
+        description=description,
+        uploader=uploader,
+    )
