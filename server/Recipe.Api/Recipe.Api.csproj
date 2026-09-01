@@ -20,6 +20,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Curated reference data, read at runtime. Versioned with the code because it is
+         reviewed like code: a wrong ratio here ruins someone's dinner. -->
+    <!-- Update, not Include: the Web SDK already globs .json as Content, and adding it
+         again is a duplicate-item error. -->
+    <Content Update="Data\Seed\IngredientRules.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Asp.Versioning.Mvc" Version="10.2.1" />
     <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="10.2.1" />
     <PackageReference Include="Asp.Versioning.OpenApi" Version="10.2.3" />

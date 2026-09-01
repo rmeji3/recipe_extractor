@@ -12,8 +12,25 @@ public class Recipe
 
     public required string UserId { get; set; }
 
-    public Guid SavedPostId { get; set; }
+    /// <summary>
+    /// The post this was extracted from. Null on a variant produced by substitution — that
+    /// came from another recipe, not from a video.
+    /// </summary>
+    public Guid? SavedPostId { get; set; }
     public SavedPost? SavedPost { get; set; }
+
+    /// <summary>
+    /// Set when this recipe is an adaptation of another. The original keeps its post and
+    /// stays untouched: it is what the substitution was derived from, and overwriting it
+    /// would destroy the source.
+    /// </summary>
+    public Guid? DerivedFromRecipeId { get; set; }
+
+    /// <summary>
+    /// Short name for a variant — "vegetarian", "higher protein". What a tab is labelled.
+    /// Null on an original.
+    /// </summary>
+    public string? VariantLabel { get; set; }
 
     public ExtractionStatus Status { get; set; }
 

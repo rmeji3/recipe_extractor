@@ -1,9 +1,10 @@
 # Server — Code Guidelines
 
-> **Status: the pipeline and authentication are complete.** `Import`, `Metadata` (stage 1),
-> `Classification`, `Recipes`, and `Auth` are all built, with a Redis-backed queue behind
-> them and a Python sidecar for transcription and vision. Everything below describes real
-> files. Not built: rate limiting, metrics, deployment.
+> **Status: feature-complete for v1 and the v2 substitution work.** `Import`, `Metadata`
+> (stage 1), `Classification`, `Recipes`, `Auth`, `Substitution`, `Cooking`, and `Pantry`
+> are all built, with a Redis-backed queue behind them and a Python sidecar for
+> transcription, vision, and classification. Everything below describes real files. Not
+> built: rate limiting, metrics, deployment, and the Expo client.
 
 ASP.NET Core (.NET 10) API with EF Core. **Postgres in production, SQLite in tests** —
 keep queries provider-agnostic. Once a folder has real files in it, read the
@@ -21,6 +22,7 @@ neighboring files before writing code and match their patterns.
 | Middleware | `Middleware/` | `ExceptionHandlingMiddleware` — last-resort 500 handler, already wired first in the pipeline. |
 | Shared helpers | `Common/` | `PaginatedResult<T>`, `CaptionText`, `Exceptions/DomainValidationException`. |
 | Auth | `Auth/` | `DevAuthenticationHandler` — Development/Testing only, stubs a fixed user. |
+| Reference data | `Data/Seed/` | Curated substitution rules. Versioned with the code because a wrong ratio ruins dinner. |
 | Tests | `Tests/Recipe.Tests/` | xUnit (v2) against SQLite, driven through `AppFixture`. |
 
 Domains, from the build plan in the root [README](../README.md): `Import` (built —
@@ -94,6 +96,52 @@ let anyone sign in as anyone.
   must not hand anyone a live session, and rotation limits a stolen token to one use.
 - **Access tokens cannot be revoked** — they are trusted until they expire (1 hour).
   Sign-out revokes the refresh token; it is not instant logout.
+
+## Substitution is grounded, not generated
+
+`POST /api/recipes/{id}/modify` adapts a recipe — vegetarian, healthier, higher protein —
+and the model is **never asked how**. It is handed a fixed list of swaps drawn from
+`Data/Seed/IngredientRules.json`, already filtered by the goal and the user's profile, and
+asked only to choose among them. `ModificationService.Validate` re-checks every change
+against that list and discards anything unbacked.
+
+Three things must stay true or the feature stops being trustworthy:
+
+- **Ratios come from the rule, never the model.** Butter is ~15% water and oil is not, so
+  the swap is 0.75. That number decides whether the dish works.
+- **Effect text comes from the rule.** The warning a user reads about their crumb going
+  dense was written by a person, not improvised per request.
+- **`avoid` is a filter, not a hint.** An allergy the model is merely told about is one
+  that eventually gets ignored.
+
+Substitutions are ranked so ingredients the user already cooks with come first — that
+needs their imported library to exist, which is the half no competitor has.
+
+A recipe with nothing substitutable returns no changes and says so. "No suggestion" is the
+correct failure; confident nonsense is not.
+
+**A variant is a new recipe with `SavedPostId = null` and `DerivedFromRecipeId` set.** One
+recipe per saved post is a unique index, and the original came from a real video — it is
+what the substitution was derived from and must stay intact.
+
+## Cooking, pantry, and the review pile
+
+- **`GET /api/recipes/{id}/cook?servings=N`** numbers the steps and parses timers out of
+  their text. **Quantities scale, times do not** — doubling a recipe barely changes how
+  long it cooks, and multiplying that number would be dangerous. Vague amounts ("a pinch")
+  pass through untouched, and counts round to halves because "1.33 eggs" is unusable.
+- **`POST /api/grocery-list`** merges ingredients across recipes. It refuses to merge what
+  it cannot honestly combine — 100g of butter and 2 tbsp of butter need a density table
+  nobody has, so the item keeps both sources and a null total. One wrong number is worse
+  than two lines.
+- **`GET /api/pantry/cookable`** ranks recipes by how much is already in the house. Its
+  ingredient matching is deliberately loose: a recipe saying "boneless chicken thighs" is
+  covered by a pantry saying "chicken", because sending someone shopping for what is in
+  the fridge is the worse error.
+- **`GET`/`POST /api/import/review`** is where the `Uncertain` tier goes. Without it,
+  tuning classification for precision just strands posts forever. Approve queues
+  extraction; reject marks them skipped and **keeps them visible** — that list is what
+  makes aggressive precision safe.
 
 ## Long work is queued, never awaited
 

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from .classify import Verdict, classify
 from .config import MAX_UPLOAD_BYTES, WHISPER_MODEL
+from .modify import modify
 from .frames import select as select_frames
 from .media import MediaError, prepare, workspace
 from .recipe import Recipe, extract, extract_with_frames
@@ -203,6 +204,27 @@ class ClassifyResponse(BaseModel):
 
 
 # ------------------------------------------------------------------- endpoints
+
+
+class ModifyResponse(BaseModel):
+    changes: list[dict]
+    summary: str
+
+
+@app.post("/modify", response_model=ModifyResponse)
+def modify_recipe(payload: dict) -> ModifyResponse:
+    """
+    Picks substitutions from the caller's allowed list.
+
+    The caller supplies the candidates and validates the result against them, so this
+    endpoint cannot introduce an ingredient nobody vetted.
+    """
+    selection = modify(payload)
+
+    return ModifyResponse(
+        changes=[{"from": c.from_ingredient, "to": c.to} for c in selection.changes],
+        summary=selection.summary,
+    )
 
 
 @app.post("/classify", response_model=ClassifyResponse)

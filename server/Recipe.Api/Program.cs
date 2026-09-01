@@ -6,11 +6,14 @@ using Recipe.Api.Middleware;
 using Recipe.Api.OpenApi;
 using Recipe.Api.Services.Auth;
 using Recipe.Api.Services.Classification;
+using Recipe.Api.Services.Cooking;
+using Recipe.Api.Services.Pantry;
 using Recipe.Api.Services.Extraction;
 using Recipe.Api.Services.Import;
 using Recipe.Api.Services.Metadata;
 using Recipe.Api.Services.Queue;
 using Recipe.Api.Services.Recipes;
+using Recipe.Api.Services.Substitution;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -118,6 +121,22 @@ builder.Services.AddScoped<IRecipeService, RecipeService>();
 builder.Services.AddScoped<IMetadataService, MetadataService>();
 builder.Services.AddScoped<IClassificationService, ClassificationService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IProfileService, ProfileService>();
+builder.Services.AddScoped<ICookingService, CookingService>();
+builder.Services.AddScoped<IPantryService, PantryService>();
+builder.Services.AddScoped<ICookLogService, CookLogService>();
+builder.Services.AddScoped<IModificationService, ModificationService>();
+
+// The curated substitution table. A singleton because it is read-only reference data that
+// changes with a deploy, not with a request.
+builder.Services.AddSingleton<IIngredientRuleStore, FileIngredientRuleStore>();
+
+builder.Services.AddHttpClient<IModificationClient, ModificationClient>(client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["Sidecar:BaseUrl"] ?? "http://localhost:8000");
+    client.Timeout = TimeSpan.FromMinutes(2);
+});
 
 builder.Services.AddHttpClient<IAppleTokenValidator, AppleTokenValidator>(client =>
 {

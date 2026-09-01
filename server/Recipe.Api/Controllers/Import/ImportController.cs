@@ -237,6 +237,46 @@ public class ImportController(IImportService importService, IMetadataService met
         }
     }
 
+    /// <summary>
+    /// The review pile — posts classification could not call either way.
+    /// </summary>
+    /// <remarks>
+    /// Ranked most-likely-food first, so the easy yeses come before the genuinely marginal
+    /// ones. Thumbnails are included; a review pile without them is unusable.
+    /// </remarks>
+    [HttpGet("review")]
+    [ProducesResponseType(typeof(PaginatedResult<SavedPostDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Review(
+        CancellationToken cancellationToken,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 50)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        return userId is null
+            ? Unauthorized()
+            : Ok(await importService.ListForReviewAsync(userId, pageNumber, pageSize, cancellationToken));
+    }
+
+    /// <summary>Settles a batch of review decisions.</summary>
+    /// <remarks>
+    /// Approved posts are queued for extraction immediately. Rejected ones become
+    /// "skipped" and stay visible — that list is the safety valve that makes it safe to
+    /// tune classification for precision in the first place.
+    /// </remarks>
+    [HttpPost("review")]
+    [ProducesResponseType(typeof(ReviewResultDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Review(
+        [FromBody] ReviewDecisionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        return userId is null
+            ? Unauthorized()
+            : Ok(await importService.ReviewAsync(userId, request, cancellationToken));
+    }
+
     /// <summary>Lists the posts stored by one import.</summary>
     /// <response code="404">No such import for this user.</response>
     [HttpGet("{id:guid}/posts")]

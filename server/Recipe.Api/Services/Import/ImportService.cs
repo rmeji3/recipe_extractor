@@ -159,6 +159,87 @@ public class ImportService(AppDbContext db, IJobQueue queue, TimeProvider timePr
         return await PaginatedResult<SavedPostDto>.CreateAsync(query, pageNumber, pageSize, cancellationToken);
     }
 
+    public Task<PaginatedResult<SavedPostDto>> ListForReviewAsync(
+        string userId,
+        int pageNumber,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var query = db.SavedPosts
+            .Where(p => p.UserId == userId
+                        && p.ClassificationStatus == ClassificationStatus.Uncertain)
+            // Most likely food first: the user gets the easy yeses out of the way before
+            // the genuinely marginal ones, which is what makes bulk approval quick.
+            .OrderByDescending(p => p.FoodConfidence)
+            .ThenBy(p => p.Id)
+            .Select(p => new SavedPostDto(
+                p.Id, p.Platform, p.PlatformItemId, p.Url, p.Kind, p.Caption,
+                p.CreatorHandle, p.CreatorName, p.Hashtags, p.SavedAt, p.CreatedAt,
+                p.MetadataStatus, p.ThumbnailUrl,
+                p.ClassificationStatus, p.FoodConfidence, p.ClassifiedBy));
+
+        return PaginatedResult<SavedPostDto>.CreateAsync(query, pageNumber, pageSize, cancellationToken);
+    }
+
+    public async Task<ReviewResultDto> ReviewAsync(
+        string userId,
+        ReviewDecisionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var touched = request.Approve.Concat(request.Reject).Distinct().ToList();
+
+        if (touched.Count == 0)
+        {
+            return new ReviewResultDto(0, 0, await PendingReviewCountAsync(userId, cancellationToken));
+        }
+
+        var posts = await db.SavedPosts
+            .Where(p => p.UserId == userId && touched.Contains(p.Id))
+            .ToListAsync(cancellationToken);
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var approve = request.Approve.ToHashSet();
+        var reject = request.Reject.ToHashSet();
+        var queued = new List<Job>();
+        int approved = 0, rejected = 0;
+
+        foreach (var post in posts)
+        {
+            // Approve wins a conflict: the user meant to keep it, and a wrongly kept post
+            // is a line in a cookbook while a wrongly dropped one is invisible.
+            if (approve.Contains(post.Id))
+            {
+                post.ClassificationStatus = ClassificationStatus.Food;
+                post.FoodConfidence = 1.0;
+                post.ClassifiedBy = "user";
+                post.ClassifiedAt = now;
+                queued.Add(new Job(JobType.Extract, userId, post.Id, 1, now));
+                approved++;
+            }
+            else if (reject.Contains(post.Id))
+            {
+                post.ClassificationStatus = ClassificationStatus.NotFood;
+                post.FoodConfidence = 0;
+                post.ClassifiedBy = "user";
+                post.ClassifiedAt = now;
+                rejected++;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        // Queued after the write: a crash between the two costs a re-review, not a lost
+        // decision.
+        await queue.EnqueueManyAsync(queued, cancellationToken);
+
+        return new ReviewResultDto(approved, rejected, await PendingReviewCountAsync(userId, cancellationToken));
+    }
+
+    private Task<int> PendingReviewCountAsync(string userId, CancellationToken cancellationToken) =>
+        db.SavedPosts.CountAsync(
+            p => p.UserId == userId && p.ClassificationStatus == ClassificationStatus.Uncertain,
+            cancellationToken);
+
     private static ImportSummaryDto ToSummary(ImportJob job) => new(
         job.Id, job.Platform, job.SubmittedCount, job.ImportedCount, job.DuplicateCount, job.CreatedAt);
 }

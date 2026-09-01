@@ -15,4 +15,19 @@ public interface IImportService
 
     /// <summary>Posts stored by one import. Throws <see cref="KeyNotFoundException"/> if it is not this user's.</summary>
     Task<PaginatedResult<SavedPostDto>> ListPostsAsync(string userId, Guid importId, int pageNumber, int pageSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The review pile: posts classification could not call either way.
+    /// </summary>
+    /// <remarks>
+    /// Tuning for precision only works if there is somewhere for the uncertain middle to
+    /// go. Without this the tier is a dead end — posts sit unreviewable forever and the
+    /// user never sees recipes that were one judgement away from their cookbook.
+    /// </remarks>
+    Task<PaginatedResult<SavedPostDto>> ListForReviewAsync(
+        string userId, int pageNumber, int pageSize, CancellationToken cancellationToken = default);
+
+    /// <summary>Settles a batch of review decisions, queueing extraction for approvals.</summary>
+    Task<ReviewResultDto> ReviewAsync(
+        string userId, ReviewDecisionRequest request, CancellationToken cancellationToken = default);
 }

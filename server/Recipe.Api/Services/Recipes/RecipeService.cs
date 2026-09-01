@@ -138,7 +138,7 @@ public class RecipeService(
         recipe.Status = ExtractionStatus.Processing;
         recipe.FailureReason = null;
         recipe.UpdatedAt = now;
-        recipe.SearchText = BuildSearchText(recipe, post);
+        recipe.SearchText = RecipeSearchText.Build(recipe, post);
 
         await db.SaveChangesAsync(cancellationToken);
 
@@ -233,7 +233,7 @@ public class RecipeService(
         mine.FailureReason = null;
         mine.ExtractedAt = source.ExtractedAt;
         mine.UpdatedAt = now;
-        mine.SearchText = BuildSearchText(mine, post);
+        mine.SearchText = RecipeSearchText.Build(mine, post);
 
         await db.SaveChangesAsync(cancellationToken);
 
@@ -310,7 +310,7 @@ public class RecipeService(
             recipe.FailureReason = ex.Message;
         }
 
-        recipe.SearchText = BuildSearchText(recipe, post);
+        recipe.SearchText = RecipeSearchText.Build(recipe, post);
         await db.SaveChangesAsync(cancellationToken);
 
         return ToDto(recipe, post);
@@ -369,7 +369,7 @@ public class RecipeService(
         return ToDto(row.Recipe, row.SavedPost);
     }
 
-    public Task<PaginatedResult<RecipeSummaryDto>> ListAsync(
+    public async Task<PaginatedResult<RecipeSummaryDto>> ListAsync(
         string userId,
         ExtractionStatus? status,
         string? search,
@@ -394,7 +394,15 @@ public class RecipeService(
                 : rows.Where(r => EF.Functions.Like(r.SearchText, $"%{term}%"));
         }
 
-        var query = rows
+        // A search that matches a variant should surface the dish, not the variant on its
+        // own — "vegetarian butter chicken" is still butter chicken. Matching rows are
+        // reduced to the id of whichever recipe heads their family.
+        var familyIds = rows
+            .Select(r => r.DerivedFromRecipeId ?? r.Id)
+            .Distinct();
+
+        var families = db.Recipes
+            .Where(r => r.UserId == userId && familyIds.Contains(r.Id))
             .OrderByDescending(r => r.FoodConfidence)
             .ThenByDescending(r => r.UpdatedAt)
             .Select(r => new RecipeSummaryDto(
@@ -406,11 +414,63 @@ public class RecipeService(
                 r.Steps.Count,
                 r.FoodConfidence,
                 r.SavedPost!.CreatorHandle,
-                r.SavedPost.Url,
+                r.SavedPost!.Url,
                 r.IsEdited,
                 r.UpdatedAt));
 
-        return PaginatedResult<RecipeSummaryDto>.CreateAsync(query, pageNumber, pageSize, cancellationToken);
+        var page = await PaginatedResult<RecipeSummaryDto>.CreateAsync(
+            families, pageNumber, pageSize, cancellationToken);
+
+        return page with { Items = await AttachVariantsAsync(userId, page.Items, cancellationToken) };
+    }
+
+    /// <summary>
+    /// Hangs each dish's adaptations off it, for tabs in the UI.
+    /// </summary>
+    /// <remarks>
+    /// One extra query for the whole page rather than one per row — the alternative is a
+    /// classic N+1, and a cookbook page is fifty rows.
+    /// </remarks>
+    private async Task<IReadOnlyList<RecipeSummaryDto>> AttachVariantsAsync(
+        string userId,
+        IReadOnlyList<RecipeSummaryDto> items,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count == 0)
+        {
+            return items;
+        }
+
+        var ids = items.Select(i => i.Id).ToList();
+
+        var variants = await db.Recipes
+            .Where(r => r.UserId == userId
+                        && r.DerivedFromRecipeId != null
+                        && ids.Contains(r.DerivedFromRecipeId!.Value))
+            .OrderBy(r => r.CreatedAt)
+            .Select(r => new
+            {
+                Parent = r.DerivedFromRecipeId!.Value,
+                Variant = new RecipeVariantDto(
+                    r.Id,
+                    r.VariantLabel ?? "variant",
+                    r.Ingredients.Count,
+                    r.Steps.Count)
+            })
+            .ToListAsync(cancellationToken);
+
+        if (variants.Count == 0)
+        {
+            return items;
+        }
+
+        var byParent = variants
+            .GroupBy(v => v.Parent)
+            .ToDictionary(g => g.Key, g => g.Select(v => v.Variant).ToList());
+
+        return [.. items.Select(item => byParent.TryGetValue(item.Id, out var found)
+            ? item with { Variants = found }
+            : item)];
     }
 
     public async Task<RecipeDto> UpdateAsync(
@@ -444,35 +504,11 @@ public class RecipeService(
         recipe.Status = ExtractionStatus.Extracted;
         recipe.FailureReason = null;
         recipe.UpdatedAt = timeProvider.GetUtcNow().UtcDateTime;
-        recipe.SearchText = BuildSearchText(recipe, recipe.SavedPost);
+        recipe.SearchText = RecipeSearchText.Build(recipe, recipe.SavedPost);
 
         await db.SaveChangesAsync(cancellationToken);
 
         return ToDto(recipe, recipe.SavedPost);
-    }
-
-    /// <summary>
-    /// Flattens everything worth searching into one string. Ingredients and steps live in
-    /// JSON columns that no provider indexes usefully, so the searchable text is
-    /// maintained alongside them on every write.
-    /// </summary>
-    private static string BuildSearchText(RecipeEntity recipe, SavedPost? post)
-    {
-        var parts = new List<string> { recipe.Title };
-        parts.AddRange(recipe.Ingredients.Select(i => i.Item));
-        parts.AddRange(recipe.Equipment);
-
-        if (!string.IsNullOrWhiteSpace(post?.CreatorHandle))
-        {
-            parts.Add(post.CreatorHandle);
-        }
-
-        if (!string.IsNullOrWhiteSpace(post?.CreatorName))
-        {
-            parts.Add(post.CreatorName);
-        }
-
-        return string.Join(" ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
     }
 
     private static RecipeDto ToDto(RecipeEntity recipe, SavedPost? post) => new(
@@ -493,5 +529,7 @@ public class RecipeService(
         post?.CreatorHandle,
         post?.Url,
         recipe.ExtractedAt,
-        recipe.UpdatedAt);
+        recipe.UpdatedAt,
+        recipe.VariantLabel,
+        recipe.DerivedFromRecipeId);
 }

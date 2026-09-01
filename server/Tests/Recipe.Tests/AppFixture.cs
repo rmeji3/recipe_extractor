@@ -14,6 +14,7 @@ using Recipe.Api.Services.Classification;
 using Recipe.Api.Services.Metadata;
 using Recipe.Api.Services.Queue;
 using Recipe.Api.Services.Recipes;
+using Recipe.Api.Services.Substitution;
 
 namespace Recipe.Tests;
 
@@ -80,6 +81,12 @@ public class AppFixture : WebApplicationFactory<Program>, IAsyncLifetime
             services.RemoveAll<IAppleTokenValidator>();
             services.AddSingleton<StubAppleValidator>();
             services.AddSingleton<IAppleTokenValidator>(sp => sp.GetRequiredService<StubAppleValidator>());
+
+            // Set the stub to return things the model was told not to return — that is
+            // how the grounding guarantee is actually proved.
+            services.RemoveAll<IModificationClient>();
+            services.AddSingleton<StubModifier>();
+            services.AddSingleton<IModificationClient>(sp => sp.GetRequiredService<StubModifier>());
 
             services.RemoveAll<IClassifierClient>();
             services.AddSingleton<StubClassifier>();
