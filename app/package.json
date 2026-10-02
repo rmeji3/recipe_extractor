@@ -1,0 +1,36 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "expo": "~56.0.21",
+    "expo-apple-authentication": "~56.0.4",
+    "expo-constants": "~56.0.25",
+    "expo-dev-client": "~56.0.26",
+    "expo-linking": "~56.0.17",
+    "expo-router": "~56.2.20",
+    "expo-secure-store": "~56.0.4",
+    "expo-status-bar": "~56.0.4",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0"
+  },
+  "devDependencies": {
+    "@react-native/jest-preset": "^0.85.3",
+    "@types/jest": "^30.0.0",
+    "@types/react": "~19.2.2",
+    "jest": "^30.5.2",
+    "jest-expo": "~56.0.0",
+    "react-test-renderer": "^19.2.3",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "test": "jest"
+  },
+  "private": true
+}

@@ -2,6 +2,8 @@ using System.Security.Claims;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Recipe.Api.Common;
 using Recipe.Api.Common.Exceptions;
 using Recipe.Api.Dtos.Recipes;
 using Recipe.Api.Dtos.Substitution;
@@ -34,6 +36,7 @@ public class ModificationsController(IModificationService modifications) : Contr
     /// <response code="400">No goal given, or the recipe has no ingredients yet.</response>
     /// <response code="404">No such recipe for this user.</response>
     [HttpPost("{id:guid}/modify")]
+    [EnableRateLimiting(RateLimiting.Extraction)]
     [ProducesResponseType(typeof(ModificationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

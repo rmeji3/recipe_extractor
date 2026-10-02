@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Recipe.Api.Common;
 using Recipe.Api.Common.Exceptions;
 using Recipe.Api.Dtos.Import;
@@ -189,6 +190,7 @@ public class ImportController(IImportService importService, IMetadataService met
     /// <response code="200">The run finished. Counts describe what happened.</response>
     /// <response code="404">No such import for this user.</response>
     [HttpPost("{id:guid}/metadata")]
+    [EnableRateLimiting(RateLimiting.Extraction)]
     [ProducesResponseType(typeof(MetadataRunDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> FetchMetadata(

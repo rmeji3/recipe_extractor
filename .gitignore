@@ -31,3 +31,10 @@ web/next-env.d.ts
 
 # Dev runner output
 .dev-logs/
+
+# Expo
+app/node_modules/
+app/.expo/
+app/dist/
+app/ios/
+app/android/

@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Recipe.Api.Common;
 using Recipe.Api.Common.Exceptions;
 using Recipe.Api.Dtos.Recipes;
@@ -37,6 +38,7 @@ public class RecipesController(IRecipeService recipeService) : ControllerBase
     /// </response>
     /// <response code="400">The link could not be read as a TikTok or Instagram post.</response>
     [HttpPost("from-url")]
+    [EnableRateLimiting(RateLimiting.Extraction)]
     [ProducesResponseType(typeof(RecipeDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(RecipeDto), StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -77,6 +79,7 @@ public class RecipesController(IRecipeService recipeService) : ControllerBase
     /// <response code="400">The post cannot be located on its platform yet.</response>
     /// <response code="404">No such saved post for this user.</response>
     [HttpPost("extract/{savedPostId:guid}")]
+    [EnableRateLimiting(RateLimiting.Extraction)]
     [ProducesResponseType(typeof(RecipeDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

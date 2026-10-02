@@ -3,8 +3,9 @@
 > **Status: feature-complete for v1 and the v2 substitution work.** `Import`, `Metadata`
 > (stage 1), `Classification`, `Recipes`, `Auth`, `Substitution`, `Cooking`, and `Pantry`
 > are all built, with a Redis-backed queue behind them and a Python sidecar for
-> transcription, vision, and classification. Everything below describes real files. Not
-> built: rate limiting, metrics, deployment, and the Expo client.
+> transcription, vision, and classification, plus per-user rate limiting. Everything below
+> describes real files. Not built: metrics and deployment. The Expo client lives in `app/`
+> and runs on device.
 
 ASP.NET Core (.NET 10) API with EF Core. **Postgres in production, SQLite in tests** —
 keep queries provider-agnostic. Once a folder has real files in it, read the
@@ -94,6 +95,13 @@ let anyone sign in as anyone.
   sign-ins, never overwrite what is already stored, or a reinstall silently erases them.
 - **Refresh tokens are stored as SHA-256 hashes and rotated on every use.** A leaked table
   must not hand anyone a live session, and rotation limits a stolen token to one use.
+- **`JwtSecurityTokenHandler` renames inbound claims by default**, so `sub` arrives as a
+  WS-Federation URI and reading it by its real name finds nothing. `AppleTokenValidator`
+  clears `InboundClaimTypeMap` for exactly this reason — validation otherwise succeeds and
+  the subject then looks missing, which is a baffling way to fail.
+- **A malformed token is a rejected sign-in, not a server error.** Anything that is not
+  valid base64url throws `ArgumentException` before a single security check runs, so that
+  has to be caught alongside `SecurityTokenException` or garbage input returns a 500.
 - **Access tokens cannot be revoked** — they are trusted until they expire (1 hour).
   Sign-out revokes the refresh token; it is not instant logout.
 
@@ -142,6 +150,29 @@ what the substitution was derived from and must stay intact.
   tuning classification for precision just strands posts forever. Approve queues
   extraction; reject marks them skipped and **keeps them visible** — that list is what
   makes aggressive precision safe.
+
+## Rate limits protect the bill, not the server
+
+Accepting a request is cheap; what it queues is not. One client looping on `from-url` can
+commission hundreds of fetches, transcriptions, and model calls in a minute, and the worker
+will pay for every one.
+
+So the tight limit — `RateLimiting.Extraction`, 40/hour per user, sliding — sits only on
+endpoints that commission paid work: `from-url`, `extract`, `modify`, and stage-1 metadata.
+Reads are unlimited in practice. **Put `[EnableRateLimiting(RateLimiting.Extraction)]` on
+any new endpoint that costs money**, or it is uncapped.
+
+Limits partition by user id, so `UseRateLimiter()` must stay *after* `UseAuthentication()`.
+Anonymous requests fall back to IP, which is weak — a phone network NATs thousands behind
+one address — but only sign-in and health are anonymous.
+
+Rejections carry `Retry-After`. The limiter does not always supply it, so there is a
+fallback; a 429 with no header makes a well-behaved client guess, and guessing badly turns
+a retry loop into a hammer.
+
+**These counters are in-process.** They reset on restart and do not span instances. That is
+fine for one box and wrong the moment there are two — at which point this needs to move
+behind Redis, which is already there for the queue.
 
 ## Long work is queued, never awaited
 

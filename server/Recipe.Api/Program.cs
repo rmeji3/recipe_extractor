@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Asp.Versioning;
 using Recipe.Api.Auth;
+using Recipe.Api.Common;
 using Recipe.Api.Data.App;
 using Recipe.Api.Middleware;
 using Recipe.Api.OpenApi;
@@ -114,6 +115,8 @@ else
 }
 
 builder.Services.AddAuthorization();
+
+builder.Services.AddAppRateLimiting(builder.Configuration, builder.Environment);
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IImportService, ImportService>();
@@ -231,6 +234,10 @@ app.UseHttpsRedirection();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// After authentication, so limits partition by user rather than by IP. Before the
+// endpoints, so a rejected request never reaches a controller.
+app.UseRateLimiter();
 
 app.MapControllers();
 

@@ -105,6 +105,22 @@ public class AuthTests(AppFixture fixture) : IClassFixture<AppFixture>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.notreal.signature")]
+    [InlineData("this-is-not-a-jwt-at-all-but-is-long-enough")]
+    public async Task A_malformed_token_is_a_rejected_sign_in_not_a_server_error(string token)
+    {
+        // A token that is not valid base64url fails before any security check runs, which
+        // threw a different exception type and surfaced as a 500.
+        var client = fixture.CreateClient();
+        fixture.Services.GetRequiredService<StubAppleValidator>().Respond = null;
+
+        var response = await client.PostAsJsonAsync("/api/auth/apple",
+            new AppleSignInRequest { IdentityToken = token });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     [Fact]
     public async Task The_access_token_authenticates_a_real_request()
     {

@@ -35,7 +35,20 @@ public class AppleTokenValidator(
     private const string Issuer = "https://appleid.apple.com";
     private const string KeysPath = "/auth/keys";
 
-    private static readonly JwtSecurityTokenHandler Handler = new();
+    /// <summary>
+    /// Token handler with inbound claim mapping switched off.
+    /// </summary>
+    /// <remarks>
+    /// By default this handler rewrites JWT claim names into the old WS-Federation URIs, so
+    /// <c>sub</c> arrives as
+    /// <c>http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier</c> and
+    /// looking it up by its real name finds nothing. Validation succeeds and the subject
+    /// then appears to be missing, which is a confusing way to fail.
+    /// </remarks>
+    private static readonly JwtSecurityTokenHandler Handler = new()
+    {
+        InboundClaimTypeMap = new Dictionary<string, string>(),
+    };
 
     // Apple rotates its signing keys, so this cannot be fetched once and kept forever;
     // equally it must not be fetched per request. An hour is Apple's own guidance.
@@ -84,8 +97,12 @@ public class AppleTokenValidator(
 
             return new AppleIdentity(subject, principal.FindFirst(JwtRegisteredClaimNames.Email)?.Value);
         }
-        catch (SecurityTokenException ex)
+        catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
         {
+            // ArgumentException as well as SecurityTokenException: a token that is not even
+            // valid base64url fails before any security check runs, and catching only the
+            // latter turned malformed input into a 500 rather than a rejected sign-in.
+            //
             // Deliberately vague to the caller: which check failed is useful to an attacker
             // and useless to a legitimate client. The detail goes to the log.
             logger.LogWarning(ex, "Rejected an Apple identity token");
